@@ -1,0 +1,17 @@
+.admin-theme {
+  min-height: 100vh;
+  background: #fffaf5;
+  color: #1f2937;
+}
+
+.admin-theme input,
+.admin-theme select,
+.admin-theme textarea {
+  background: rgba(255, 255, 255, 0.98);
+  color: #1f2937;
+  border-color: rgba(226, 232, 240, 0.98);
+}
+
+.admin-theme button {
+  transition: all 0.2s ease;
+}

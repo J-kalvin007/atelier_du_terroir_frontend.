@@ -1,0 +1,176 @@
+"use client";
+
+import Link from "next/link";
+import { FormEvent, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { register } from "@/lib/auth";
+
+export function RegisterForm() {
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password1, setPassword1] = useState("");
+  const [password2, setPassword2] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setSuccess(null);
+
+    if (password1 !== password2) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        await register({
+          name,
+          email,
+          password1,
+          password2,
+        });
+
+        setSuccess("Compte cree avec succes. Tu peux maintenant te connecter.");
+        router.push("/login");
+      } catch (submissionError) {
+        setError(
+          submissionError instanceof Error
+            ? submissionError.message
+            : "Une erreur est survenue pendant l'inscription."
+        );
+      }
+    });
+  }
+
+  return (
+    <div className="relative w-full max-w-md">
+      <div className="overflow-hidden rounded-[2rem] border border-[#d6dfd2] bg-white shadow-[0_28px_80px_rgba(24,37,24,0.14)]">
+        <div className="bg-gradient-to-r from-[#1f4d3f] to-[#8b5e34] px-8 py-8 text-center text-white">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/18 text-2xl backdrop-blur-sm">
+            🎁
+          </div>
+          <h1 className="text-2xl font-bold">Creer un compte</h1>
+          <p className="mt-1 text-sm text-white/82">
+            Inscription client conforme a notre API actuelle
+          </p>
+        </div>
+
+        <form className="space-y-4 p-8" onSubmit={handleSubmit}>
+          {error ? (
+            <div className="rounded-xl border border-[#f0b7b7] bg-[#fff4f4] px-4 py-3 text-sm text-[#9a2f2f]">
+              {error}
+            </div>
+          ) : null}
+
+          {success ? (
+            <div className="rounded-xl border border-[#bfd9c7] bg-[#f3fbf5] px-4 py-3 text-sm text-[#24573f]">
+              {success}
+            </div>
+          ) : null}
+
+          <label className="block space-y-2">
+            <span className="text-sm font-medium text-[#2a3528]">Nom</span>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
+                👤
+              </span>
+              <input
+                className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+                placeholder="Votre nom"
+                required
+              />
+            </div>
+          </label>
+
+          <label className="block space-y-2">
+            <span className="text-sm font-medium text-[#2a3528]">Adresse email</span>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
+                ✉
+              </span>
+              <input
+                className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                placeholder="nom@email.com"
+                required
+              />
+            </div>
+          </label>
+
+          <label className="block space-y-2">
+            <span className="text-sm font-medium text-[#2a3528]">Mot de passe</span>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
+                🔒
+              </span>
+              <input
+                className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
+                type={showPassword ? "text" : "password"}
+                value={password1}
+                onChange={(event) => setPassword1(event.target.value)}
+                autoComplete="new-password"
+                placeholder="Votre mot de passe"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((current) => !current)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978] hover:text-[#1f4d3f]"
+              >
+                {showPassword ? "🙈" : "👁"}
+              </button>
+            </div>
+          </label>
+
+          <label className="block space-y-2">
+            <span className="text-sm font-medium text-[#2a3528]">Confirmer le mot de passe</span>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
+                🔒
+              </span>
+              <input
+                className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
+                type={showPassword ? "text" : "password"}
+                value={password2}
+                onChange={(event) => setPassword2(event.target.value)}
+                autoComplete="new-password"
+                placeholder="Retapez votre mot de passe"
+                required
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
+                {showPassword ? "🙈" : "👁"}
+              </span>
+            </div>
+          </label>
+
+          <button
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#8b5e34] to-[#704a28] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(139,94,52,0.24)] transition hover:shadow-[0_20px_40px_rgba(139,94,52,0.3)] disabled:cursor-not-allowed disabled:opacity-70"
+            type="submit"
+            disabled={isPending}
+          >
+            {isPending ? "Inscription en cours..." : "Creer mon compte"}
+            {isPending ? null : <span aria-hidden="true">→</span>}
+          </button>
+
+          <p className="text-center text-sm text-[#667260]">
+            Deja un compte ?{" "}
+            <Link className="font-semibold text-[#1f4d3f] hover:underline" href="/login">
+              Se connecter
+            </Link>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,17 @@
+export { default as ananasImage } from "./ananas.jpg";
+export { default as chouxImage } from "./choux1.jpg";
+export { default as haricotImage } from "./haricot.png";
+export { default as lapinCardImage } from "./lapin.png";
+export { default as lapinHeroImage } from "./lapin1.jpg";
+export { default as legumeImage } from "./legume.jpg";
+export { default as logoImage } from "./LOGO.png";
+export { default as maisGridImage } from "./mais.jpg";
+export { default as maisProductImage } from "./mais1.jpg";
+export { default as maniocImage } from "./manioc.jpg";
+export { default as oignonsImage } from "./oignons.jpg";
+export { default as orangeImage } from "./orange.jpg";
+export { default as pimentHeroImage } from "./piment.png";
+export { default as pimentShowcaseImage } from "./pimentR.jpg";
+export { default as poivronsImage } from "./Poivrons.png";
+export { default as tomateCardImage } from "./tomate.jpeg";
+export { default as tomateHeroImage } from "./tomate1.jpg";

@@ -1,0 +1,133 @@
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+
+export interface CartItem {
+  productId: string;
+  variantId: string | null;
+  name: string;
+  sku: string;
+  price: string;
+  compareAtPrice: string | null;
+  image: string | null;
+  quantity: number;
+  maxStock: number;
+  currency: string;
+  slug: string;
+}
+
+interface CartState {
+  items: CartItem[];
+  promoCode: string | null;
+  promoDiscount: number;
+  loyaltyPointsToUse: number;
+  isDrawerOpen: boolean;
+  addItem: (item: CartItem) => void;
+  removeItem: (productId: string, variantId: string | null) => void;
+  updateQuantity: (productId: string, variantId: string | null, qty: number) => void;
+  clearCart: () => void;
+  setPromoCode: (code: string | null, discount: number) => void;
+  setLoyaltyPoints: (points: number) => void;
+  toggleDrawer: (open?: boolean) => void;
+  getItemCount: () => number;
+  getSubtotal: () => number;
+  getTotal: () => number;
+}
+
+export const useCartStore = create<CartState>()(
+  persist(
+    (set, get) => ({
+      items: [],
+      promoCode: null,
+      promoDiscount: 0,
+      loyaltyPointsToUse: 0,
+      isDrawerOpen: false,
+
+      addItem: (item) => {
+        set((state) => {
+          const existingIndex = state.items.findIndex(
+            (entry) => entry.productId === item.productId && entry.variantId === item.variantId
+          );
+
+          if (existingIndex >= 0) {
+            const updated = [...state.items];
+            const existing = updated[existingIndex];
+            updated[existingIndex] = {
+              ...existing,
+              quantity: Math.min(existing.quantity + item.quantity, existing.maxStock),
+            };
+            return { items: updated, isDrawerOpen: true };
+          }
+
+          return { items: [...state.items, item], isDrawerOpen: true };
+        });
+      },
+
+      removeItem: (productId, variantId) => {
+        set((state) => ({
+          items: state.items.filter(
+            (entry) => !(entry.productId === productId && entry.variantId === variantId)
+          ),
+        }));
+      },
+
+      updateQuantity: (productId, variantId, qty) => {
+        set((state) => {
+          if (qty <= 0) {
+            return {
+              items: state.items.filter(
+                (entry) => !(entry.productId === productId && entry.variantId === variantId)
+              ),
+            };
+          }
+
+          return {
+            items: state.items.map((entry) =>
+              entry.productId === productId && entry.variantId === variantId
+                ? { ...entry, quantity: Math.min(qty, entry.maxStock) }
+                : entry
+            ),
+          };
+        });
+      },
+
+      clearCart: () => {
+        set({
+          items: [],
+          promoCode: null,
+          promoDiscount: 0,
+          loyaltyPointsToUse: 0,
+        });
+      },
+
+      setPromoCode: (code, discount) => {
+        set({ promoCode: code, promoDiscount: discount });
+      },
+
+      setLoyaltyPoints: (points) => {
+        set({ loyaltyPointsToUse: points });
+      },
+
+      toggleDrawer: (open) => {
+        set((state) => ({
+          isDrawerOpen: open !== undefined ? open : !state.isDrawerOpen,
+        }));
+      },
+
+      getItemCount: () => get().items.reduce((sum, item) => sum + item.quantity, 0),
+
+      getSubtotal: () =>
+        get().items.reduce((sum, item) => sum + parseFloat(item.price) * item.quantity, 0),
+
+      getTotal: () => Math.max(0, get().getSubtotal() - get().promoDiscount),
+    }),
+    {
+      name: "atelier-du-terroir-cart",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        items: state.items,
+        promoCode: state.promoCode,
+        promoDiscount: state.promoDiscount,
+      }),
+    }
+  )
+);
