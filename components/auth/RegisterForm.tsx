@@ -2,27 +2,59 @@
 
 import Link from "next/link";
 import { FormEvent, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { register } from "@/lib/auth";
+import {
+  applyPostLoginRedirect,
+  hasAdminAccess,
+  login,
+  register,
+} from "@/lib/auth";
 
-export function RegisterForm() {
-  const router = useRouter();
+export function RegisterForm({
+  redirectPath,
+  onSwitchToLogin,
+  loginHref = "/login",
+}: {
+  redirectPath?: string;
+  onSwitchToLogin?: () => void;
+  loginHref?: string;
+} = {}) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password1, setPassword1] = useState("");
   const [password2, setPassword2] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  function validatePassword(password: string) {
+    if (password.length < 8) {
+      return "Le mot de passe doit contenir au moins 8 caracteres.";
+    }
+
+    if (/^\d+$/.test(password)) {
+      return "Le mot de passe ne peut pas contenir uniquement des chiffres.";
+    }
+
+    const commonPasswords = ["password", "12345678", "123456789", "max12345", "password1"];
+    if (commonPasswords.includes(password.trim().toLowerCase())) {
+      return "Ce mot de passe est trop courant. Ajoutez un symbole ou des mots uniques (ex. Max@Terroir2026!).";
+    }
+
+    return null;
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    setSuccess(null);
 
     if (password1 !== password2) {
       setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+
+    const passwordError = validatePassword(password1);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 
@@ -35,8 +67,11 @@ export function RegisterForm() {
           password2,
         });
 
-        setSuccess("Compte cree avec succes. Tu peux maintenant te connecter.");
-        router.push("/login");
+        const session = await login(email.trim(), password1);
+        applyPostLoginRedirect(
+          session,
+          redirectPath ?? (hasAdminAccess(session) ? "/admin" : null)
+        );
       } catch (submissionError) {
         setError(
           submissionError instanceof Error
@@ -52,11 +87,11 @@ export function RegisterForm() {
       <div className="overflow-hidden rounded-[2rem] border border-[#d6dfd2] bg-white shadow-[0_28px_80px_rgba(24,37,24,0.14)]">
         <div className="bg-gradient-to-r from-[#1f4d3f] to-[#8b5e34] px-8 py-8 text-center text-white">
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/18 text-2xl backdrop-blur-sm">
-            🎁
+            +
           </div>
           <h1 className="text-2xl font-bold">Creer un compte</h1>
           <p className="mt-1 text-sm text-white/82">
-            Inscription client conforme a notre API actuelle
+            Meme inscription pour tous. Le role admin est attribue cote backend si necessaire.
           </p>
         </div>
 
@@ -67,17 +102,11 @@ export function RegisterForm() {
             </div>
           ) : null}
 
-          {success ? (
-            <div className="rounded-xl border border-[#bfd9c7] bg-[#f3fbf5] px-4 py-3 text-sm text-[#24573f]">
-              {success}
-            </div>
-          ) : null}
-
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Nom</span>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                👤
+                @
               </span>
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
@@ -94,7 +123,7 @@ export function RegisterForm() {
             <span className="text-sm font-medium text-[#2a3528]">Adresse email</span>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                ✉
+                @
               </span>
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
@@ -112,7 +141,7 @@ export function RegisterForm() {
             <span className="text-sm font-medium text-[#2a3528]">Mot de passe</span>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                🔒
+                *
               </span>
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
@@ -128,16 +157,20 @@ export function RegisterForm() {
                 onClick={() => setShowPassword((current) => !current)}
                 className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978] hover:text-[#1f4d3f]"
               >
-                {showPassword ? "🙈" : "👁"}
+                {showPassword ? "Masquer" : "Voir"}
               </button>
             </div>
+            <p className="text-xs leading-5 text-[#667260]">
+              Minimum 8 caracteres. Evitez les mots courants comme Max12345. Preferez lettres +
+              chiffres + symbole, ex. <strong>Max@Terroir2026!</strong>
+            </p>
           </label>
 
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Confirmer le mot de passe</span>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                🔒
+                *
               </span>
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
@@ -148,9 +181,6 @@ export function RegisterForm() {
                 placeholder="Retapez votre mot de passe"
                 required
               />
-              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                {showPassword ? "🙈" : "👁"}
-              </span>
             </div>
           </label>
 
@@ -163,12 +193,25 @@ export function RegisterForm() {
             {isPending ? null : <span aria-hidden="true">→</span>}
           </button>
 
-          <p className="text-center text-sm text-[#667260]">
-            Deja un compte ?{" "}
-            <Link className="font-semibold text-[#1f4d3f] hover:underline" href="/login">
-              Se connecter
-            </Link>
-          </p>
+          {onSwitchToLogin ? (
+            <p className="text-center text-sm text-[#667260]">
+              Deja un compte ?{" "}
+              <button
+                type="button"
+                onClick={onSwitchToLogin}
+                className="font-semibold text-[#1f4d3f] hover:underline"
+              >
+                Se connecter
+              </button>
+            </p>
+          ) : (
+            <p className="text-center text-sm text-[#667260]">
+              Deja un compte ?{" "}
+              <Link className="font-semibold text-[#1f4d3f] hover:underline" href={loginHref}>
+                Se connecter
+              </Link>
+            </p>
+          )}
         </form>
       </div>
     </div>

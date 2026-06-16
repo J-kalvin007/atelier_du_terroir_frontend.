@@ -1,5 +1,7 @@
 "use client";
 
+import { mergeAuthProfileRecords } from "@/lib/auth-profile";
+
 export type UserRole = "admin" | "client";
 
 export type AuthUser = {
@@ -24,6 +26,40 @@ export type AuthSession = {
   user: AuthUser;
 };
 
+export type UserProfileUpdatePayload = {
+  name?: string;
+  first_name?: string;
+  last_name?: string;
+};
+
+export class AuthRoleMismatchError extends Error {
+  actualRole: UserRole;
+  expectedRole: UserRole;
+
+  constructor(actualRole: UserRole, expectedRole: UserRole) {
+    super(buildRoleMismatchMessage(actualRole, expectedRole));
+    this.name = "AuthRoleMismatchError";
+    this.actualRole = actualRole;
+    this.expectedRole = expectedRole;
+  }
+}
+
+export type LoginOptions = {
+  expectedRole?: UserRole;
+};
+
+function buildRoleMismatchMessage(actualRole: UserRole, expectedRole: UserRole) {
+  if (expectedRole === "client" && actualRole === "admin") {
+    return "Ce compte est administrateur. Accede a /admin pour te connecter, pas via la connexion client.";
+  }
+
+  if (expectedRole === "admin" && actualRole === "client") {
+    return "Ce compte est client. Il ne peut pas acceder a l'espace administrateur.";
+  }
+
+  return `Ce compte est de type "${actualRole}" alors que la connexion "${expectedRole}" est requise.`;
+}
+
 type TokenResponse = {
   token?: string;
   key?: string;
@@ -31,15 +67,18 @@ type TokenResponse = {
   [key: string]: unknown;
 };
 
-const STORAGE_KEY = "atelier-du-terroir-auth-v2";
+const STORAGE_KEY = "atelier-du-terroir-auth-v3";
 const SESSION_EVENT = "atelier-du-terroir-auth-change";
 const API_BASE_URL = readEnv("NEXT_PUBLIC_API_BASE_URL", "NEXT_PUBLIC_API_URL");
 const TOKEN_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_TOKEN_ENDPOINT") ?? "/api/connexion/";
 const PROFILE_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_ME_ENDPOINT") ?? "/api/users/me/";
+const AUTH_USER_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_USER_ENDPOINT") ?? "/api/auth/user/";
 const LOGOUT_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_LOGOUT_ENDPOINT") ?? "/api/auth/logout/";
 const REGISTER_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_REGISTER_ENDPOINT") ?? "/api/auth/registration/";
 const PROXY_TOKEN_ENDPOINT = "/api/frontend-auth/login";
 const PROXY_PROFILE_ENDPOINT = "/api/frontend-auth/profile";
+const PROXY_ME_ENDPOINT = "/api/frontend-auth/me";
+const PROXY_USER_ENDPOINT = "/api/frontend-auth/user";
 const PROXY_REGISTER_ENDPOINT = "/api/frontend-auth/register";
 
 type RegisterPayload = {
@@ -52,7 +91,6 @@ type RegisterPayload = {
 type LoginPayload = {
   password: string;
   name?: string;
-  username?: string;
   email?: string;
 };
 
@@ -102,6 +140,53 @@ function readBoolean(value: unknown) {
   return typeof value === "boolean" ? value : undefined;
 }
 
+const AUTH_FIELD_LABELS: Record<string, string> = {
+  password1: "Mot de passe",
+  password2: "Confirmation du mot de passe",
+  email: "Email",
+  name: "Nom",
+  username: "Identifiant",
+};
+
+function translateAuthValidationMessage(message: string) {
+  const normalized = message.trim();
+
+  if (/too common/i.test(normalized)) {
+    return "Ce mot de passe est trop courant. Utilisez une combinaison plus unique, par exemple Max@Terroir2026! ou Atelier#Max847.";
+  }
+
+  if (/too short/i.test(normalized)) {
+    return "Le mot de passe est trop court (8 caracteres minimum).";
+  }
+
+  if (/entirely numeric/i.test(normalized)) {
+    return "Le mot de passe ne peut pas contenir uniquement des chiffres.";
+  }
+
+  if (/too similar/i.test(normalized)) {
+    return "Le mot de passe ressemble trop a votre nom ou email.";
+  }
+
+  if (/didn't match|do not match/i.test(normalized)) {
+    return "Les mots de passe ne correspondent pas.";
+  }
+
+  if (/valid email/i.test(normalized)) {
+    return "Adresse email invalide.";
+  }
+
+  if (/already exists|already registered|deja utilise|already taken/i.test(normalized)) {
+    return "Cette adresse email est deja utilisee.";
+  }
+
+  return normalized;
+}
+
+function formatAuthFieldError(field: string, message: string) {
+  const label = AUTH_FIELD_LABELS[field] ?? field;
+  return `${label} : ${translateAuthValidationMessage(message)}`;
+}
+
 function readErrorMessage(payload: unknown) {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -111,14 +196,14 @@ function readErrorMessage(payload: unknown) {
   const detail = readString(record.detail) ?? readString(record.message) ?? readString(record.error);
 
   if (detail) {
-    return detail;
+    return translateAuthValidationMessage(detail);
   }
 
   const fieldErrors: string[] = [];
 
   for (const [key, value] of Object.entries(record)) {
     if (typeof value === "string" && value.trim().length > 0) {
-      fieldErrors.push(`${key}: ${value}`);
+      fieldErrors.push(formatAuthFieldError(key, value));
       continue;
     }
 
@@ -126,7 +211,7 @@ function readErrorMessage(payload: unknown) {
       const messages = value.filter((item): item is string => typeof item === "string");
 
       if (messages.length > 0) {
-        fieldErrors.push(`${key}: ${messages.join(" ")}`);
+        fieldErrors.push(formatAuthFieldError(key, messages.join(" ")));
       }
     }
   }
@@ -212,6 +297,125 @@ async function fetchThroughProxyThenDirect(
   };
 }
 
+function readStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as string[];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function normalizeRoleToken(role: string) {
+  return role.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function isAdminBackendRole(role: string | null | undefined) {
+  if (!role?.trim()) {
+    return false;
+  }
+
+  const normalized = normalizeRoleToken(role);
+
+  if (
+    ["platform_admin", "super_admin", "admin", "manager", "staff", "superuser"].includes(
+      normalized
+    )
+  ) {
+    return true;
+  }
+
+  return normalized.endsWith("_admin") || normalized.startsWith("admin_");
+}
+
+function readPrimaryRole(data: Record<string, unknown>) {
+  const directRole =
+    readString(data.role) ??
+    readString(data.user_role) ??
+    readString(data.userType) ??
+    readString(data.user_type) ??
+    readString(data.account_type) ??
+    readString(data.type);
+
+  if (directRole) {
+    return directRole;
+  }
+
+  const nestedRoles = readStringArray(data.roles);
+  return nestedRoles.find((role) => isAdminBackendRole(role) || role.trim().length > 0) ?? null;
+}
+
+function buildAuthSessionFromLogin(
+  token: string,
+  tokenPayload: TokenResponse,
+  profilePayload: Record<string, unknown> | null,
+  loginUserRecord: Record<string, unknown> | null
+): AuthSession {
+  const profileRecord = profilePayload ?? {};
+  const loginRole = loginUserRecord ? readPrimaryRole(loginUserRecord) : null;
+  const profileRole = readPrimaryRole(profileRecord);
+  const loginRoleInference = loginUserRecord ? inferRole(loginUserRecord) : null;
+  const profileRoleInference = profilePayload ? inferRole(profileRecord) : null;
+
+  const mergedRecord = mergeAuthProfileRecords(loginUserRecord, profilePayload ?? {});
+
+  if (isAdminBackendRole(loginRole)) {
+    mergedRecord.role = loginRole;
+    mergedRecord.is_staff = true;
+  } else if (loginRoleInference === "admin") {
+    mergedRecord.is_staff = readBoolean(loginUserRecord?.is_staff) ?? true;
+    if (loginRole) {
+      mergedRecord.role = loginRole;
+    }
+  } else if (isAdminBackendRole(profileRole)) {
+    mergedRecord.role = profileRole;
+  }
+
+  const user = normalizeUser(mergedRecord);
+
+  if (loginRoleInference === "admin" || isAdminBackendRole(loginRole)) {
+    user.isStaff = true;
+    user.adminRole = true;
+    if (loginRole) {
+      user.raw = { ...user.raw, role: loginRole };
+    }
+  }
+
+  const role: UserRole =
+    loginRoleInference === "admin" ||
+    profileRoleInference === "admin" ||
+    user.isStaff ||
+    user.adminRole ||
+    isAdminBackendRole(readString(user.raw.role)) ||
+    isAdminBackendRole(loginRole) ||
+    isAdminBackendRole(profileRole)
+      ? "admin"
+      : profileRoleInference ?? loginRoleInference ?? inferRole(mergedRecord) ?? "client";
+
+  return {
+    token,
+    role,
+    user,
+  };
+}
+
+function hasAdminGroup(data: Record<string, unknown>) {
+  const groups = [
+    ...readStringArray(data.groups),
+    ...readStringArray(data.group_names),
+    ...readStringArray(data.permissions),
+  ];
+
+  return groups.some((group) => {
+    const normalized = group.toLowerCase();
+    return (
+      isAdminBackendRole(normalized) ||
+      normalized.includes("admin") ||
+      normalized.includes("staff") ||
+      normalized.includes("manager")
+    );
+  });
+}
+
 function inferRole(data: Record<string, unknown>): UserRole | null {
   const adminRoleValue = readString(data.admin_role);
   const hasAdminPrivilege =
@@ -219,8 +423,10 @@ function inferRole(data: Record<string, unknown>): UserRole | null {
     readBoolean(data.is_staff) === true ||
     readBoolean(data.is_superuser) === true ||
     readBoolean(data.admin_role) === true ||
+    hasAdminGroup(data) ||
+    isAdminBackendRole(adminRoleValue) ||
     ["super_admin", "platform_admin", "admin", "manager"].includes(
-      (adminRoleValue ?? "").toLowerCase()
+      normalizeRoleToken(adminRoleValue ?? "")
     );
 
   if (hasAdminPrivilege) {
@@ -239,14 +445,16 @@ function inferRole(data: Record<string, unknown>): UserRole | null {
     const normalizedRole = directRole.toLowerCase();
 
     if (
-      ["admin", "administrator", "staff", "superuser", "super_admin", "manager"].includes(
-        normalizedRole
-      )
+      [
+        "admin",
+        "administrator",
+        "staff",
+        "superuser",
+        "super_admin",
+        "platform_admin",
+        "manager",
+      ].includes(normalizedRole)
     ) {
-      return "admin";
-    }
-
-    if (["platform_admin"].includes(normalizedRole)) {
       return "admin";
     }
 
@@ -331,26 +539,89 @@ function inferRoleShallow(data: Record<string, unknown>): UserRole | null {
 }
 
 function normalizeUser(data: Record<string, unknown>): AuthUser {
+  const backendRole = readString(data.role);
+  const hasAdminRole =
+    isAdminBackendRole(backendRole) ||
+    readBoolean(data.is_admin) === true ||
+    readBoolean(data.is_staff) === true ||
+    readBoolean(data.is_superuser) === true ||
+    readBoolean(data.admin_role) === true ||
+    hasAdminGroup(data);
+
+  const idValue =
+    typeof data.id === "number" || typeof data.id === "string"
+      ? data.id
+      : typeof data.pk === "number" || typeof data.pk === "string"
+        ? data.pk
+        : undefined;
+
+  const firstName = readString(data.first_name) ?? readString(data.firstName);
+  const lastName = readString(data.last_name) ?? readString(data.lastName);
+  const profileName = readString(data.name) ?? readString(data.username);
+  const email = readString(data.email);
+  const displayName =
+    profileName ||
+    [firstName, lastName].filter(Boolean).join(" ").trim() ||
+    email?.split("@")[0] ||
+    "Utilisateur";
+
   return {
-    id: typeof data.id === "number" || typeof data.id === "string" ? data.id : undefined,
-    username: readString(data.username),
-    email: readString(data.email),
-    name: readString(data.name),
-    firstName: readString(data.first_name) ?? readString(data.firstName),
-    lastName: readString(data.last_name) ?? readString(data.lastName),
+    id: idValue,
+    username: profileName ?? email?.split("@")[0],
+    email,
+    name: displayName,
+    firstName,
+    lastName,
     phoneNumber: readString(data.phone_number),
     profileImage: readString(data.profile_image),
     isActive: readBoolean(data.is_active),
     isVerified: readBoolean(data.is_verified),
-    isStaff: readBoolean(data.is_staff),
-    adminRole: readBoolean(data.admin_role),
+    isStaff: hasAdminRole || readBoolean(data.is_staff),
+    adminRole: hasAdminRole ? true : readBoolean(data.admin_role),
     raw: data,
   };
 }
 
 async function requestProfile(token: string) {
   for (const scheme of ["Token", "Bearer"] as const) {
-    const { response } = await fetchThroughProxyThenDirect(PROXY_PROFILE_ENDPOINT, PROFILE_ENDPOINT, {
+    const { response } = await fetchThroughProxyThenDirect(
+      PROXY_PROFILE_ENDPOINT,
+      PROFILE_ENDPOINT,
+      {
+        method: "GET",
+        headers: getAuthHeaders(token, scheme),
+      }
+    );
+
+    if (response.ok) {
+      const mergedPayload = (await response.json()) as Record<string, unknown>;
+      return mergedPayload;
+    }
+
+    if (response.status !== 401) {
+      break;
+    }
+  }
+
+  const [mePayload, userDetailsPayload] = await Promise.all([
+    fetchProfileSource(token, PROFILE_ENDPOINT),
+    fetchProfileSource(token, AUTH_USER_ENDPOINT),
+  ]);
+
+  if (!mePayload && !userDetailsPayload) {
+    throw new Error("Impossible de recuperer le profil utilisateur.");
+  }
+
+  return mergeAuthProfileRecords(mePayload, userDetailsPayload);
+}
+
+async function fetchProfileSource(token: string, backendPath: string) {
+  for (const scheme of ["Token", "Bearer"] as const) {
+    const proxyPath = backendPath.includes("/auth/user/")
+      ? PROXY_USER_ENDPOINT
+      : PROXY_ME_ENDPOINT;
+
+    const { response } = await fetchThroughProxyThenDirect(proxyPath, backendPath, {
       method: "GET",
       headers: getAuthHeaders(token, scheme),
     });
@@ -360,11 +631,11 @@ async function requestProfile(token: string) {
     }
 
     if (response.status !== 401) {
-      throw new Error("Impossible de recuperer le profil utilisateur.");
+      return null;
     }
   }
 
-  throw new Error("Le token est invalide ou l'API profil n'accepte pas ce format d'authentification.");
+  return null;
 }
 
 function buildLoginPayload(identifier: string, password: string): LoginPayload {
@@ -373,7 +644,6 @@ function buildLoginPayload(identifier: string, password: string): LoginPayload {
   if (normalizedIdentifier.includes("@")) {
     return {
       name: normalizedIdentifier,
-      username: normalizedIdentifier,
       email: normalizedIdentifier,
       password,
     };
@@ -381,12 +651,11 @@ function buildLoginPayload(identifier: string, password: string): LoginPayload {
 
   return {
     name: normalizedIdentifier,
-    username: normalizedIdentifier,
     password,
   };
 }
 
-export async function login(identifier: string, password: string) {
+export async function login(identifier: string, password: string, options?: LoginOptions) {
   const { response, payload } = await fetchThroughProxyThenDirect(
     PROXY_TOKEN_ENDPOINT,
     TOKEN_ENDPOINT,
@@ -417,30 +686,23 @@ export async function login(identifier: string, password: string) {
   }
 
   const loginUser = tokenPayload.user;
-  const loginRole =
-    inferRole(tokenPayload as Record<string, unknown>) ?? (loginUser ? inferRole(loginUser) : null);
+  const loginUserRecord =
+    loginUser && typeof loginUser === "object" ? (loginUser as Record<string, unknown>) : null;
 
   let profilePayload: Record<string, unknown> | null = null;
 
   try {
     profilePayload = await requestProfile(token);
   } catch {
-    profilePayload = loginUser ?? null;
+    profilePayload = loginUserRecord;
   }
 
-  const role = loginRole ?? (profilePayload ? inferRole(profilePayload) : null);
+  const session = buildAuthSessionFromLogin(token, tokenPayload, profilePayload, loginUserRecord);
+  const role = session.role;
 
-  if (!role) {
-    throw new Error(
-      "Impossible de determiner si l'utilisateur est admin ou client a partir des attributs API."
-    );
+  if (options?.expectedRole && role !== options.expectedRole) {
+    throw new AuthRoleMismatchError(role, options.expectedRole);
   }
-
-  const session: AuthSession = {
-    token,
-    role,
-    user: normalizeUser(profilePayload ?? loginUser ?? {}),
-  };
 
   persistSession(session);
   return session;
@@ -465,22 +727,81 @@ export async function logout(session: AuthSession | null) {
 
 export async function refreshSessionFromProfile(session: AuthSession) {
   const profilePayload = await requestProfile(session.token);
-  const role = inferRole(profilePayload);
+  const loginUserRecord = session.user.raw;
+  const mergedPayload = mergeAuthProfileRecords(profilePayload, loginUserRecord);
+  const user = normalizeUser(mergedPayload);
+  const profileRole = readString(mergedPayload.role);
+  const existingAdmin = hasAdminAccess(session);
 
-  if (!role) {
-    throw new Error(
-      "Impossible de determiner si l'utilisateur est admin ou client a partir du profil API."
-    );
+  if (existingAdmin && !user.isStaff && !user.adminRole && !isAdminBackendRole(profileRole)) {
+    user.isStaff = session.user.isStaff ?? true;
+    user.adminRole = session.user.adminRole ?? true;
+    user.raw = {
+      ...user.raw,
+      role: readString(session.user.raw.role) ?? profileRole ?? user.raw.role,
+    };
   }
+
+  const inferredRole = inferRole(mergedPayload) ?? inferRole(user.raw);
+  const role: UserRole =
+    user.isStaff ||
+    user.adminRole ||
+    isAdminBackendRole(profileRole) ||
+    isAdminBackendRole(readString(user.raw.role)) ||
+    existingAdmin
+      ? "admin"
+      : inferredRole ?? session.role;
 
   const refreshedSession: AuthSession = {
     token: session.token,
     role,
-    user: normalizeUser(profilePayload),
+    user,
   };
 
   persistSession(refreshedSession);
   return refreshedSession;
+}
+
+export async function updateUserProfile(session: AuthSession, payload: UserProfileUpdatePayload) {
+  const requestBody: Record<string, string> = {};
+
+  if (payload.name?.trim()) {
+    requestBody.name = payload.name.trim();
+  }
+
+  if (payload.first_name !== undefined) {
+    requestBody.first_name = payload.first_name.trim();
+  }
+
+  if (payload.last_name !== undefined) {
+    requestBody.last_name = payload.last_name.trim();
+  }
+
+  if (Object.keys(requestBody).length === 0) {
+    throw new Error("Aucun champ modifiable n'a ete fourni.");
+  }
+
+  const { response, payload: errorPayload } = await fetchThroughProxyThenDirect(
+    PROXY_USER_ENDPOINT,
+    AUTH_USER_ENDPOINT,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(session.token, "Token"),
+      },
+      body: JSON.stringify(requestBody),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      (errorPayload ? readErrorMessage(errorPayload) : null) ??
+        "Impossible de mettre a jour le profil utilisateur."
+    );
+  }
+
+  return refreshSessionFromProfile(session);
 }
 
 export async function register(payload: RegisterPayload) {
@@ -588,8 +909,81 @@ export function subscribeToSession(callback: () => void) {
   };
 }
 
+export function getSessionRoleLabel(session: AuthSession | null | undefined) {
+  if (!session) {
+    return "inconnu";
+  }
+
+  const rawRole = readString(session.user.raw.role);
+  return rawRole ?? session.role;
+}
+
+export function hasAdminAccess(session: AuthSession | null | undefined) {
+  if (!session) {
+    return false;
+  }
+
+  return Boolean(
+    session.role === "admin" ||
+      session.user.isStaff ||
+      session.user.adminRole ||
+      isAdminBackendRole(readString(session.user.raw.role))
+  );
+}
+
 export function getDashboardPath(role: UserRole) {
   return role === "admin" ? "/admin" : "/";
+}
+
+export function buildAdminReturnPath(section?: string | null) {
+  if (!section || section === "overview") {
+    return "/admin";
+  }
+
+  return `/admin?section=${encodeURIComponent(section)}`;
+}
+
+export function buildAdminLoginPath(section?: string | null) {
+  return buildAdminReturnPath(section);
+}
+
+export function resolveAuthRedirectPath(session: AuthSession, requestedRedirect: string | null) {
+  const safeRedirect =
+    requestedRedirect && requestedRedirect.startsWith("/") ? requestedRedirect : null;
+
+  if (hasAdminAccess(session)) {
+    if (safeRedirect?.startsWith("/admin")) {
+      return safeRedirect;
+    }
+
+    return "/admin";
+  }
+
+  if (safeRedirect?.startsWith("/admin")) {
+    return safeRedirect;
+  }
+
+  if (safeRedirect) {
+    return safeRedirect;
+  }
+
+  return "/";
+}
+
+export function applyPostLoginRedirect(session: AuthSession, requestedRedirect?: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.location.assign(resolveAuthRedirectPath(session, requestedRedirect ?? null));
+}
+
+export function isRoleAllowed(session: AuthSession | null | undefined, allowedRole: UserRole) {
+  return Boolean(session && session.role === allowedRole);
+}
+
+export function getLoginPath(_role?: UserRole) {
+  return "/login";
 }
 
 function normalizeStoredSession(session: AuthSession) {
@@ -607,8 +1001,15 @@ function normalizeStoredSession(session: AuthSession) {
     }) ??
     session.role;
 
+  const role: UserRole =
+    session.user.isStaff ||
+    session.user.adminRole ||
+    isAdminBackendRole(readString(rawUser.role))
+      ? "admin"
+      : inferredRole;
+
   return {
     ...session,
-    role: inferredRole,
+    role,
   } satisfies AuthSession;
 }

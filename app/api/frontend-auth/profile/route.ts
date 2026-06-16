@@ -5,8 +5,7 @@ import {
   isOfflineTunnelPayload,
   toGatewayPayload,
 } from "@/app/api/_lib/authProxy";
-
-const PROFILE_ENDPOINTS = ["/api/users/me/", "/api/auth/user/"] as const;
+import { mergeAuthProfileRecords } from "@/lib/auth-profile";
 
 export const runtime = "nodejs";
 
@@ -18,38 +17,37 @@ export async function GET(request: Request) {
       return NextResponse.json({ detail: "En-tete Authorization manquant." }, { status: 401 });
     }
 
-    for (const endpoint of PROFILE_ENDPOINTS) {
-      const response = await fetch(buildBackendUrl(endpoint), {
-        method: "GET",
-        headers: applyBackendProxyHeaders(
-          new Headers({
-          Accept: "application/json",
-          Authorization: authorization,
-          })
-        ),
-        cache: "no-store",
-      });
+    const headers = applyBackendProxyHeaders(
+      new Headers({
+        Accept: "application/json",
+        Authorization: authorization,
+      })
+    );
 
-      if (response.ok) {
-        const payload = await response.json();
-        return NextResponse.json(payload, { status: response.status });
-      }
+    const [meResult, userResult] = await Promise.all([
+      fetchBackendProfile("/api/users/me/", headers),
+      fetchBackendProfile("/api/auth/user/", headers),
+    ]);
 
-      const payload = await parseResponsePayload(response);
-
-      if (isOfflineTunnelPayload(payload)) {
-        return NextResponse.json(toGatewayPayload(payload), { status: 502 });
-      }
-
-      if (response.status !== 404) {
-        return NextResponse.json(payload, { status: response.status });
-      }
+    if (isOfflineTunnelPayload(meResult.payload) || isOfflineTunnelPayload(userResult.payload)) {
+      return NextResponse.json(
+        toGatewayPayload(meResult.payload ?? userResult.payload),
+        { status: 502 }
+      );
     }
 
-    return NextResponse.json(
-      { detail: "Aucun endpoint profil disponible sur le backend." },
-      { status: 404 }
+    if (!meResult.ok && !userResult.ok) {
+      return NextResponse.json(meResult.payload ?? userResult.payload ?? { detail: "Profil indisponible." }, {
+        status: meResult.status === 404 ? userResult.status : meResult.status,
+      });
+    }
+
+    const mergedProfile = mergeAuthProfileRecords(
+      meResult.ok ? (meResult.payload as Record<string, unknown>) : null,
+      userResult.ok ? (userResult.payload as Record<string, unknown>) : null
     );
+
+    return NextResponse.json(mergedProfile, { status: 200 });
   } catch (error) {
     return NextResponse.json(
       {
@@ -61,6 +59,22 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+async function fetchBackendProfile(path: string, headers: Headers) {
+  const response = await fetch(buildBackendUrl(path), {
+    method: "GET",
+    headers,
+    cache: "no-store",
+  });
+
+  const payload = await parseResponsePayload(response);
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    payload,
+  };
 }
 
 async function parseResponsePayload(response: Response) {

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Settings, Save, CheckCircle, HelpCircle, Loader2 } from "lucide-react";
+import { UserProfileForm } from "@/components/auth/UserProfileForm";
 
 type StoreSettings = {
   storeName: string;
@@ -197,6 +198,8 @@ export default function SettingsSection() {
           Enregistrer les Parametres
         </button>
       </form>
+
+      <UserProfileForm />
     </div>
   );
 }

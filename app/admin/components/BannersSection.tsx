@@ -82,13 +82,13 @@ export default function BannersSection() {
                   </span>
                   <h3 className="text-lg font-bold text-slate-900 mt-3">{banner.title || "Sans titre"}</h3>
                   <p className="text-sm text-slate-600 mt-2">
-                    {banner.description || "Aucune description fournie pour cette banniere."}
+                    {banner.subtitle || "Aucune description fournie pour cette banniere."}
                   </p>
                   <div className="mt-5 flex justify-between items-center text-xs text-slate-400">
-                    <span>Priorite: {banner.priority ?? 0}</span>
-                    {banner.target_url ? (
+                    <span>Position: {banner.position ?? 0}</span>
+                    {banner.cta_url ? (
                       <a
-                        href={banner.target_url}
+                        href={banner.cta_url}
                         target="_blank"
                         rel="noreferrer"
                         className="text-[#8b5e34] font-semibold flex items-center gap-1 hover:underline"

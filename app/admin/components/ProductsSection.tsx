@@ -19,9 +19,10 @@ import {
   X,
 } from "lucide-react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
-import { cn, formatCurrency, readApiError } from "@/lib/utils";
+import { cn, formatCurrency, readApiError, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
 import {
   type AdminCatalogProductPayload,
+  type ProductTypeEnum,
   createAdminProduct,
   createAdminProductImage,
   deleteAdminProduct,
@@ -29,6 +30,7 @@ import {
   getAdminProductImages,
   getAdminProducts,
   getAdminProductVariants,
+  getPublicCategories,
   updateAdminProduct,
   type AdminCategory,
   type AdminCatalogProduct,
@@ -55,7 +57,7 @@ interface ProductFormState {
   slug: string;
   sku: string;
   description: string;
-  product_type: string;
+  product_type: ProductTypeEnum;
   price: string;
   stock: string;
   weight_grams: string;
@@ -75,11 +77,17 @@ interface UploadedProductImage {
 interface ProductFormErrors {
   name?: string;
   sku?: string;
-  description?: string;
   price?: string;
   stock?: string;
   category?: string;
+  product_type?: string;
 }
+
+const PRODUCT_TYPE_OPTIONS: Array<{ value: ProductTypeEnum; label: string }> = [
+  { value: "RAW", label: "RAW — Brut" },
+  { value: "PROCESSED", label: "PROCESSED — Transforme" },
+  { value: "EXPORT", label: "EXPORT — Export" },
+];
 
 const INITIAL_FORM: ProductFormState = {
   name: "",
@@ -89,7 +97,7 @@ const INITIAL_FORM: ProductFormState = {
   product_type: "RAW",
   price: "",
   stock: "0",
-  weight_grams: "0",
+  weight_grams: "",
   seo_title: "",
   seo_description: "",
   is_top: false,
@@ -103,19 +111,12 @@ const STOCK_BADGE: Record<string, { label: string; className: string }> = {
 };
 
 function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50);
+  return sanitizeApiSlug(value);
 }
 
 function makeSku(value: string) {
-  const base = slugify(value).toUpperCase().replace(/-/g, "-");
-  return (base || "PRODUIT").slice(0, 20);
+  const base = sanitizeApiSlug(value).toUpperCase().replace(/-/g, "_");
+  return (base || "PRODUIT").slice(0, 100);
 }
 
 function validateProductForm(
@@ -124,37 +125,42 @@ function validateProductForm(
 ): ProductFormErrors {
   const errors: ProductFormErrors = {};
 
-  if (!form.name.trim()) errors.name = "Le backend exige un nom de produit.";
-  if (!form.sku.trim()) errors.sku = "Le SKU est obligatoire.";
-  if (!form.description.trim()) errors.description = "La description est obligatoire.";
-  if (!form.price.trim()) errors.price = "Le prix est obligatoire.";
-  if (!form.stock.trim()) errors.stock = "Le stock est obligatoire.";
-  if (!selectedCategoryId) errors.category = "La catégorie est obligatoire.";
+  if (!form.name.trim()) errors.name = "name* est obligatoire (max 255).";
+  if (!form.sku.trim()) errors.sku = "sku* est obligatoire (max 100).";
+  if (!form.price.trim()) errors.price = "price* est obligatoire (decimal).";
+  if (form.stock.trim() && Number.isNaN(Number(form.stock))) {
+    errors.stock = "stock doit etre un entier >= 0.";
+  }
+  if (!selectedCategoryId) errors.category = "category* (UUID) est obligatoire.";
+  if (!PRODUCT_TYPE_OPTIONS.some((option) => option.value === form.product_type)) {
+    errors.product_type = "product_type* doit etre RAW, PROCESSED ou EXPORT.";
+  }
 
   return errors;
 }
 
 function buildProductPayload(
   form: ProductFormState,
-  selectedCategoryId: string
+  selectedCategoryId: string,
+  relatedProductIds: string[]
 ): AdminCatalogProductPayload {
-  const payload: AdminCatalogProductPayload = {
-    category: selectedCategoryId || null,
-    name: form.name.trim(),
-    slug: form.slug.trim() || slugify(form.name),
-    sku: form.sku.trim(),
-    description: form.description.trim(),
-    product_type: form.product_type || "RAW",
-    price: form.price.trim(),
-    stock: Number(form.stock || 0),
-    weight_grams: Number(form.weight_grams || 0),
-    seo_title: form.seo_title.trim(),
-    seo_description: form.seo_description.trim(),
-    is_top: Boolean(form.is_top),
-    related_products: [],
-  };
+  const weightRaw = form.weight_grams.trim();
 
-  return payload;
+  return {
+    category: selectedCategoryId,
+    name: form.name.trim().slice(0, 255),
+    slug: form.slug.trim() ? sanitizeApiSlug(form.slug, form.name) : sanitizeApiSlug(form.name),
+    sku: form.sku.trim().slice(0, 100),
+    description: form.description.trim() || null,
+    product_type: form.product_type,
+    price: sanitizeDecimalPrice(form.price),
+    stock: form.stock.trim() ? Number(form.stock) : 0,
+    weight_grams: weightRaw ? Number(weightRaw) : null,
+    seo_title: form.seo_title.trim().slice(0, 255) || null,
+    seo_description: form.seo_description.trim() || null,
+    is_top: form.is_top,
+    related_products: relatedProductIds,
+  };
 }
 
 function mapProduct(product: AdminCatalogProduct): ProductRow {
@@ -164,7 +170,12 @@ function mapProduct(product: AdminCatalogProduct): ProductRow {
     sku: product.sku,
     price: product.price,
     stock: product.stock ?? 0,
-    status: product.is_in_stock || "IN_STOCK",
+    status:
+      typeof product.is_in_stock === "string"
+        ? product.is_in_stock
+        : (product.stock ?? 0) > 0
+          ? "IN_STOCK"
+          : "OUT_OF_STOCK",
     categoryName:
       typeof product.category === "object" ? product.category?.name || "" : String(product.category || ""),
     image:
@@ -200,6 +211,7 @@ export default function ProductsSection() {
   const [formErrors, setFormErrors] = useState<ProductFormErrors>({});
   const [form, setForm] = useState<ProductFormState>(INITIAL_FORM);
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [relatedProductIds, setRelatedProductIds] = useState<string[]>([]);
   const [selectedImageId, setSelectedImageId] = useState("");
   const [uploadedImages, setUploadedImages] = useState<UploadedProductImage[]>([]);
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
@@ -261,26 +273,37 @@ export default function ProductsSection() {
   };
 
   const loadProducts = async () => {
-    if (!session?.token) return;
     setLoading(true);
+    setError(null);
     try {
-      const rawProducts = await getAdminProducts(session.token);
+      const rawProducts = await getAdminProducts(session?.token);
       setProducts(rawProducts);
     } catch (err) {
       console.error("Error fetching products:", err);
-      setError("Impossible de charger les produits.");
+      setError(readApiError(err, "Impossible de charger les produits."));
+      setProducts([]);
     } finally {
       setLoading(false);
     }
   };
 
   const loadCatalogData = async () => {
-    if (!session?.token) return;
     setCatalogLoading(true);
     const [categoriesResult, imagesResult, variantsResult] = await Promise.allSettled([
-      getAdminCategories(session.token),
-      getAdminProductImages(session.token),
-      getAdminProductVariants(session.token),
+      session?.token
+        ? getAdminCategories(session.token)
+        : getPublicCategories().then((items) =>
+            items.map((category) => ({
+              id: category.id,
+              name: category.name,
+              slug: category.slug,
+              description: category.description,
+              image: category.image,
+              children: category.children ?? null,
+            }))
+          ),
+      getAdminProductImages(session?.token),
+      getAdminProductVariants(session?.token),
     ]);
 
     if (categoriesResult.status === "fulfilled") {
@@ -310,8 +333,8 @@ export default function ProductsSection() {
   };
 
   useEffect(() => {
-    if (!session?.token) return;
-    void Promise.all([loadProducts(), loadCatalogData()]);
+    void loadProducts();
+    void loadCatalogData();
   }, [session?.token]);
 
   const resetForm = () => {
@@ -319,6 +342,7 @@ export default function ProductsSection() {
     setFormErrors({});
     setShowAdvancedFields(false);
     setSelectedCategoryId("");
+    setRelatedProductIds([]);
     setSelectedImageId("");
     setUploadedImages([]);
     setPreviewImageIndex(0);
@@ -342,10 +366,10 @@ export default function ProductsSection() {
       slug: product.slug || "",
       sku: product.sku || "",
       description: product.description || "",
-      product_type: product.product_type || "RAW",
+      product_type: (product.product_type as ProductTypeEnum) || "RAW",
       price: product.price || "",
       stock: String(product.stock ?? 0),
-      weight_grams: String(product.weight_grams ?? 0),
+      weight_grams: product.weight_grams != null ? String(product.weight_grams) : "",
       seo_title: product.seo_title || "",
       seo_description: product.seo_description || "",
       is_top: Boolean(product.is_top),
@@ -353,6 +377,9 @@ export default function ProductsSection() {
     });
     setSelectedCategoryId(
       typeof product.category === "object" ? product.category?.id || "" : String(product.category || "")
+    );
+    setRelatedProductIds(
+      (product.related_products ?? []).map((item) => (typeof item === "string" ? item : item.id))
     );
     const primaryImageIndex = Math.max(
       product.images?.findIndex((image) => image.is_primary) ?? 0,
@@ -442,12 +469,13 @@ export default function ProductsSection() {
     }
 
     if (!session?.token) {
+      setError("Connecte-toi avec un compte admin pour enregistrer un produit.");
       setSaving(false);
       return;
     }
 
     try {
-      const payload = buildProductPayload(form, selectedCategoryId);
+      const payload = buildProductPayload(form, selectedCategoryId, relatedProductIds);
 
       const savedProduct = editingProductId
         ? await updateAdminProduct(session.token, editingProductId, payload)
@@ -589,7 +617,9 @@ export default function ProductsSection() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Produits</h1>
-          <p className="text-sm text-slate-500">{rows.length} produit(s) enregistrés</p>
+          <p className="text-sm text-slate-500">
+            
+          </p>
         </div>
         <button
           onClick={openCreateModal}
@@ -677,7 +707,12 @@ export default function ProductsSection() {
                       <div className="flex items-center gap-3">
                         <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-100">
                           {product.image ? (
-                            <Image src={product.image} alt={product.name} fill className="object-cover" sizes="40px" />
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={product.image}
+                              alt={product.name}
+                              className="h-full w-full object-cover"
+                            />
                           ) : (
                             <div className="flex h-full w-full items-center justify-center text-xs text-slate-400">IMG</div>
                           )}
@@ -763,7 +798,7 @@ export default function ProductsSection() {
                     {editingProductId ? "Modifier le produit" : "Nouveau produit"}
                   </h3>
                   <p className="mt-1 text-xs text-slate-500">
-                    Les champs visibles correspondent aux données utiles pour le backend.
+                    Champs Swagger ProductCreateUpdate — les images sont uploadees apres creation.
                   </p>
                 </div>
                 <button onClick={closeModal} className="text-slate-400 hover:text-slate-900">
@@ -774,9 +809,36 @@ export default function ProductsSection() {
               <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="space-y-4">
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium text-slate-500">Nom du produit *</label>
+                    <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                      category * <span className="text-slate-400">(UUID)</span>
+                    </label>
+                    <select
+                      value={selectedCategoryId}
+                      onChange={(e) => setSelectedCategoryId(e.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
+                    >
+                      <option value="">Selectionner une categorie</option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                    {categories.length === 0 && !catalogLoading ? (
+                      <p className="mt-1 text-xs text-amber-700">
+                        Cree d&apos;abord une categorie dans Admin → Categories.
+                      </p>
+                    ) : null}
+                    {formErrors.category && <p className="mt-1 text-xs text-red-600">{formErrors.category}</p>}
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                      name * <span className="text-slate-400">(max 255)</span>
+                    </label>
                     <input
                       value={form.name}
+                      maxLength={255}
                       onChange={(e) => handleFormChange("name", e.target.value)}
                       className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                     />
@@ -785,19 +847,24 @@ export default function ProductsSection() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">SKU *</label>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        sku * <span className="text-slate-400">(max 100)</span>
+                      </label>
                       <input
                         value={form.sku}
+                        maxLength={100}
                         onChange={(e) => handleFormChange("sku", e.target.value)}
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                       />
-                      <p className="mt-1 text-[10px] text-slate-400">Généré automatiquement depuis le nom.</p>
                       {formErrors.sku && <p className="mt-1 text-xs text-red-600">{formErrors.sku}</p>}
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Slug</label>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        slug <span className="text-slate-400">(max 50, nullable)</span>
+                      </label>
                       <input
                         value={form.slug}
+                        maxLength={50}
                         onChange={(e) => handleFormChange("slug", e.target.value)}
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                       />
@@ -805,21 +872,24 @@ export default function ProductsSection() {
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium text-slate-500">Description *</label>
+                    <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                      description <span className="text-slate-400">(nullable)</span>
+                    </label>
                     <textarea
                       rows={4}
                       value={form.description}
                       onChange={(e) => handleFormChange("description", e.target.value)}
                       className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-primary"
                     />
-                    {formErrors.description && <p className="mt-1 text-xs text-red-600">{formErrors.description}</p>}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Prix (FCFA) *</label>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        price * <span className="text-slate-400">(decimal string)</span>
+                      </label>
                       <input
-                        type="number"
+                        inputMode="decimal"
                         value={form.price}
                         onChange={(e) => handleFormChange("price", e.target.value)}
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
@@ -827,9 +897,12 @@ export default function ProductsSection() {
                       {formErrors.price && <p className="mt-1 text-xs text-red-600">{formErrors.price}</p>}
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Stock *</label>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        stock <span className="text-slate-400">(integer, min 0)</span>
+                      </label>
                       <input
                         type="number"
+                        min={0}
                         value={form.stock}
                         onChange={(e) => handleFormChange("stock", e.target.value)}
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
@@ -840,43 +913,66 @@ export default function ProductsSection() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Poids (grammes)</label>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        weight_grams <span className="text-slate-400">(nullable)</span>
+                      </label>
                       <input
                         type="number"
+                        min={0}
                         value={form.weight_grams}
                         onChange={(e) => handleFormChange("weight_grams", e.target.value)}
+                        placeholder="Laisser vide si non applicable"
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Type de produit</label>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        product_type *
+                      </label>
                       <select
                         value={form.product_type}
-                        onChange={(e) => handleFormChange("product_type", e.target.value)}
+                        onChange={(e) =>
+                          handleFormChange("product_type", e.target.value as ProductTypeEnum)
+                        }
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                       >
-                        <option value="RAW">RAW</option>
-                        <option value="PROCESSED">PROCESSED</option>
-                        <option value="DRIED">DRIED</option>
+                        {PRODUCT_TYPE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
                       </select>
+                      {formErrors.product_type && (
+                        <p className="mt-1 text-xs text-red-600">{formErrors.product_type}</p>
+                      )}
                     </div>
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium text-slate-500">Catégorie *</label>
+                    <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                      related_products <span className="text-slate-400">(UUID[], optionnel)</span>
+                    </label>
                     <select
-                      value={selectedCategoryId}
-                      onChange={(e) => setSelectedCategoryId(e.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
+                      multiple
+                      value={relatedProductIds}
+                      onChange={(e) =>
+                        setRelatedProductIds(
+                          Array.from(e.target.selectedOptions, (option) => option.value)
+                        )
+                      }
+                      className="min-h-[88px] w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-900 outline-none focus:border-primary"
                     >
-                      <option value="">Sélectionner une catégorie</option>
-                      {categories.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
+                      {products
+                        .filter((product) => product.id !== editingProductId)
+                        .map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name} ({product.sku})
+                          </option>
+                        ))}
                     </select>
-                    {formErrors.category && <p className="mt-1 text-xs text-red-600">{formErrors.category}</p>}
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      Maintenir Ctrl/Cmd pour selectionner plusieurs produits.
+                    </p>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -886,8 +982,8 @@ export default function ProductsSection() {
                       className="flex w-full items-center justify-between text-left"
                     >
                       <div>
-                        <p className="text-sm font-semibold text-slate-900">Champs avancés</p>
-                        <p className="text-xs text-slate-500">SEO, mise en avant et réglages complémentaires</p>
+                        <p className="text-sm font-semibold text-slate-900">SEO & is_top</p>
+                        <p className="text-xs text-slate-500">seo_title, seo_description, is_top</p>
                       </div>
                       <span className="text-xs font-medium text-primary">
                         {showAdvancedFields ? "Masquer" : "Afficher"}
@@ -898,9 +994,12 @@ export default function ProductsSection() {
                       <div className="mt-4 space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <label className="mb-1.5 block text-xs font-medium text-slate-500">SEO title</label>
+                            <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                              seo_title <span className="text-slate-400">(max 255)</span>
+                            </label>
                             <input
                               value={form.seo_title}
+                              maxLength={255}
                               onChange={(e) => handleFormChange("seo_title", e.target.value)}
                               className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                             />
@@ -912,13 +1011,15 @@ export default function ProductsSection() {
                                 checked={form.is_top}
                                 onChange={(e) => handleFormChange("is_top", e.target.checked)}
                               />
-                              Produit mis en avant
+                              is_top
                             </label>
                           </div>
                         </div>
 
                         <div>
-                          <label className="mb-1.5 block text-xs font-medium text-slate-500">SEO description</label>
+                          <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                            seo_description
+                          </label>
                           <textarea
                             rows={3}
                             value={form.seo_description}
@@ -1143,7 +1244,9 @@ export default function ProductsSection() {
                   onClick={handleSaveProduct}
                   disabled={
                     saving ||
+                    !session?.token ||
                     !form.name.trim() ||
+                    !form.sku.trim() ||
                     !form.price.trim() ||
                     !selectedCategoryId
                   }

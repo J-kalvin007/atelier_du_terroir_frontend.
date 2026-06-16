@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ShoppingBag } from "lucide-react";
 import { logoImage } from "@/assets/images";
-import { logout, readSession } from "@/lib/auth";
+import { logout, readSession, hasAdminAccess } from "@/lib/auth";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import CartDrawer from "@/components/cart/CartDrawer";
 import { useCartStore } from "@/store/cartStore";
@@ -39,8 +39,8 @@ export function LegacyHeader() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const isAuthenticated = Boolean(session);
-  const isAdmin = session?.role === "admin";
+  const isAuthenticated = Boolean(session?.token);
+  const isAdmin = hasAdminAccess(session);
   const displayName =
     session?.user.firstName ||
     session?.user.name ||
@@ -138,8 +138,21 @@ export function LegacyHeader() {
 
             {isAuthenticated ? (
               <>
+                {isAdmin ? (
+                  <Link
+                    href="/admin"
+                    className={cx(
+                      "rounded-full border px-4 py-2 text-sm font-semibold",
+                      pathname === "/" && !isScrolled
+                        ? "border-white/30 text-white hover:bg-white/10"
+                        : "border-[#d8c4ab] text-[#1f4d3f] hover:border-[#8b5e34] hover:text-[#8b5e34]"
+                    )}
+                  >
+                    Dashboard Admin
+                  </Link>
+                ) : null}
                 <Link
-                  href={isAdmin ? "/admin" : "/"}
+                  href="/account"
                   className={cx(
                     "rounded-full border px-4 py-2 text-sm font-semibold",
                     pathname === "/" && !isScrolled
@@ -147,7 +160,7 @@ export function LegacyHeader() {
                       : "border-[#d8c4ab] text-[#1f4d3f] hover:border-[#8b5e34] hover:text-[#8b5e34]"
                   )}
                 >
-                  {isAdmin ? "Dashboard Admin" : displayName}
+                  {displayName}
                 </Link>
                 <button
                   type="button"
@@ -243,12 +256,21 @@ export function LegacyHeader() {
             <div className="mt-6 space-y-2 border-t border-[#eadcca] pt-5">
               {isAuthenticated ? (
                 <>
+                  {isAdmin ? (
+                    <Link
+                      href="/admin"
+                      className="block rounded-2xl border border-[#d8c4ab] px-4 py-3 text-sm font-semibold text-[#1f4d3f]"
+                      onClick={() => setMobileOpen(false)}
+                    >
+                      Ouvrir le dashboard admin
+                    </Link>
+                  ) : null}
                   <Link
-                    href={isAdmin ? "/admin" : "/"}
+                    href="/account"
                     className="block rounded-2xl border border-[#d8c4ab] px-4 py-3 text-sm font-semibold text-[#1f4d3f]"
                     onClick={() => setMobileOpen(false)}
                   >
-                    {isAdmin ? "Ouvrir le dashboard admin" : displayName}
+                    Mon compte ({displayName})
                   </Link>
                   <button
                     type="button"

@@ -1,13 +1,17 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   getAdminCategories,
   getAdminProducts,
   getAdminProductVariants,
   getAdminPromoCodes,
+  getPublicCategories,
+  type AdminProductVariant,
 } from "@/lib/ecommerce-api";
 import { useAuthSession } from "@/components/auth/useAuthSession";
+import { hasAdminAccess } from "@/lib/auth";
 
 type OverviewState = {
   products: number;
@@ -19,6 +23,7 @@ type OverviewState = {
 
 export default function OverviewSection() {
   const session = useAuthSession();
+  const isAdmin = hasAdminAccess(session);
   const [state, setState] = useState<OverviewState>({
     products: 0,
     categories: 0,
@@ -30,15 +35,27 @@ export default function OverviewSection() {
 
   useEffect(() => {
     let active = true;
-    if (!session) return;
 
     void (async () => {
       try {
         const [products, categories, variants, promoCodes] = await Promise.all([
-          getAdminProducts(session.token),
-          getAdminCategories(session.token),
-          getAdminProductVariants(session.token),
-          getAdminPromoCodes(session.token),
+          getAdminProducts(session?.token),
+          session?.token ? getAdminCategories(session.token) : getPublicCategories().then((items) =>
+            items.map((category) => ({
+              id: category.id,
+              name: category.name,
+              slug: category.slug,
+              description: category.description,
+              image: category.image,
+              children: category.children ?? null,
+            }))
+          ),
+          session?.token
+            ? getAdminProductVariants(session.token).catch(() => [] as AdminProductVariant[])
+            : Promise.resolve([] as AdminProductVariant[]),
+          session?.token
+            ? getAdminPromoCodes(session.token).catch(() => [])
+            : Promise.resolve([]),
         ]);
 
         if (!active) return;
@@ -64,7 +81,7 @@ export default function OverviewSection() {
     return () => {
       active = false;
     };
-  }, [session]);
+  }, [session?.token]);
 
   return (
     <div className="space-y-6">
@@ -74,8 +91,20 @@ export default function OverviewSection() {
           Vue d&apos;ensemble du dashboard
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-7 text-[#5b6756]">
-          Structure admin remontee dans `app/admin` comme dans l&apos;ancien projet, avec nos vraies APIs actuelles.
+          Gere produits, commandes, clients et promotions. Utilise le menu lateral ou les raccourcis
+          ci-dessous. L&apos;espace client (boutique) reste accessible sans te deconnecter.
         </p>
+        <div className="mt-5 flex flex-wrap gap-3">
+          <QuickLink href="/admin?section=products" label="Ajouter un produit" />
+          <QuickLink href="/admin?section=categories" label="Categories" />
+          <QuickLink href="/admin?section=orders" label="Commandes" />
+          <QuickLink href="/" label="Voir la boutique" />
+        </div>
+        {isAdmin ? (
+          <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+            Session admin detectee — acces CRUD actif
+          </p>
+        ) : null}
       </div>
 
       {state.error ? (
@@ -109,5 +138,16 @@ function MetricCard({
       <h2 className="mt-3 text-3xl font-semibold text-[#1e261d]">{title}</h2>
       <p className="mt-3 text-sm leading-7 text-[#5b6756]">{description}</p>
     </article>
+  );
+}
+
+function QuickLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      className="inline-flex rounded-full border border-[#d8c4ab] bg-white/80 px-4 py-2 text-sm font-semibold text-[#1f4d3f] transition hover:border-[#8b5e34] hover:text-[#8b5e34]"
+    >
+      {label}
+    </Link>
   );
 }

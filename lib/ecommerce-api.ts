@@ -1,4 +1,4 @@
-import { parseApiErrorPayload } from "@/lib/utils";
+import { parseApiErrorPayload, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
 
 export type PublicCategory = {
   id: string;
@@ -103,10 +103,12 @@ export type AdminCategory = {
 
 export type AdminCategoryPayload = {
   name: string;
-  slug: string;
-  description: string;
+  slug?: string | null;
+  description?: string | null;
   image?: File | string;
 };
+
+export type ProductTypeEnum = "RAW" | "PROCESSED" | "EXPORT";
 
 export type AdminProductImage = {
   id: string;
@@ -188,23 +190,23 @@ export type AdminCatalogProduct = {
 };
 
 export type AdminCatalogProductPayload = {
-  category: string | null;
+  category: string;
   name: string;
-  slug: string;
+  slug?: string | null;
   sku: string;
-  description: string;
-  product_type: string;
+  description?: string | null;
+  product_type: ProductTypeEnum;
   price: string;
-  stock: number;
-  weight_grams: number;
-  seo_title: string;
-  seo_description: string;
-  is_top: boolean;
-  related_products: string[];
+  stock?: number;
+  weight_grams?: number | null;
+  seo_title?: string | null;
+  seo_description?: string | null;
+  is_top?: boolean | null;
+  related_products?: string[];
   images?: Array<{
     image: string;
-    alt_text: string;
-    is_primary: boolean;
+    alt_text?: string;
+    is_primary?: boolean;
     is_active?: boolean;
   }>;
 };
@@ -220,21 +222,27 @@ type Paginated<T> = {
 
 type PublicProductImage = {
   id?: string;
+  product?: string;
   image?: string | null;
   alt_text?: string;
   sort_order?: number;
   is_primary?: boolean;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type PublicProductRecord = {
   id: string;
   name: string;
   slug: string;
+  sku?: string;
   price: string;
+  stock?: number;
   compare_at_price?: string | null;
   currency?: string;
   stock_status?: string;
-  is_in_stock?: string;
+  is_in_stock?: string | boolean;
   category_name?: string;
   avg_rating?: number;
   review_count?: number;
@@ -245,7 +253,9 @@ type PublicProductRecord = {
   is_top?: boolean;
   is_boosted?: boolean;
   labels?: string[];
-  primary_image?: string | null;
+  product_type?: string;
+  description?: string;
+  primary_image?: string | PublicProductImage | null;
   image?: string | null;
   image_url?: string | null;
   thumbnail?: string | null;
@@ -263,7 +273,7 @@ function buildUrl(path: string) {
     return path;
   }
 
-  // Les appels /api/v1 passent par le proxy Next.js (evite CORS et ngrok cote navigateur).
+  // Appels /api/v1 via le proxy Next.js (evite CORS / ngrok cote navigateur).
   if (path.startsWith("/api/v1/")) {
     return path;
   }
@@ -273,6 +283,59 @@ function buildUrl(path: string) {
   }
 
   return `${API_BASE_URL.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function readFetchErrorMessage(text: string, status: number, path: string) {
+  if (status === 403) {
+    return "Acces refuse : ce compte n'a pas le role platform_admin requis pour les commandes admin. Attribue ce role dans Django (admin ou API users).";
+  }
+
+  if (!text.trim()) {
+    return `Erreur API ${status} sur ${path}`;
+  }
+
+  try {
+    return parseApiErrorPayload(JSON.parse(text), text.trim());
+  } catch {
+    return text.trim();
+  }
+}
+
+function sanitizeAdminCategoryPayload(payload: AdminCategoryPayload): AdminCategoryPayload {
+  const name = payload.name.trim().slice(0, 100);
+  const slug = sanitizeApiSlug(payload.slug ?? "", name);
+  const description = payload.description?.trim() || null;
+
+  return {
+    ...payload,
+    name,
+    slug,
+    description,
+  };
+}
+
+function sanitizeAdminProductPayload(payload: AdminCatalogProductPayload): AdminCatalogProductPayload {
+  const weightRaw = payload.weight_grams;
+  const hasWeight =
+    weightRaw !== null && weightRaw !== undefined && String(weightRaw).trim() !== "";
+
+  return {
+    category: payload.category.trim(),
+    name: payload.name.trim().slice(0, 255),
+    slug: sanitizeApiSlug(payload.slug ?? "", payload.name),
+    sku: payload.sku.trim().slice(0, 100),
+    description: payload.description?.trim() || null,
+    product_type: payload.product_type,
+    price: sanitizeDecimalPrice(payload.price),
+    stock: Math.max(0, Math.min(2147483647, Number(payload.stock) || 0)),
+    weight_grams: hasWeight
+      ? Math.max(0, Math.min(2147483647, Number(weightRaw) || 0))
+      : null,
+    seo_title: payload.seo_title?.trim().slice(0, 255) || null,
+    seo_description: payload.seo_description?.trim() || null,
+    is_top: payload.is_top ?? false,
+    related_products: payload.related_products ?? [],
+  };
 }
 
 function buildQueryString(params?: Record<string, string | number | boolean | undefined>) {
@@ -300,6 +363,10 @@ function toAbsoluteUrl(value: string | null | undefined) {
   }
 
   if (/^https?:\/\//i.test(value)) {
+    if (value.startsWith("http://") && API_BASE_URL?.startsWith("https://")) {
+      return value.replace(/^http:\/\//i, "https://");
+    }
+
     return value;
   }
 
@@ -332,53 +399,6 @@ function extractCollection<T>(payload: unknown): T[] {
   }
 
   return [];
-}
-
-function readFetchErrorMessage(text: string, status: number, path: string) {
-  if (!text.trim()) {
-    return `Erreur API ${status} sur ${path}`;
-  }
-
-  try {
-    return parseApiErrorPayload(JSON.parse(text), text.trim());
-  } catch {
-    return text.trim();
-  }
-}
-
-function sanitizeProductSlug(value: string, fallbackName: string) {
-  const source = value.trim() || fallbackName.trim().toLowerCase();
-  return source
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50);
-}
-
-function sanitizeDecimalPrice(value: string) {
-  const normalized = value.trim().replace(/\s/g, "").replace(/,/g, ".");
-  const match = normalized.match(/^-?\d{0,10}(?:\.\d{0,2})?/);
-  return match?.[0] || "0";
-}
-
-function sanitizeAdminProductPayload(payload: AdminCatalogProductPayload): AdminCatalogProductPayload {
-  return {
-    ...payload,
-    category: payload.category?.trim() || null,
-    name: payload.name.trim().slice(0, 255),
-    slug: sanitizeProductSlug(payload.slug, payload.name),
-    sku: payload.sku.trim().slice(0, 100),
-    description: payload.description?.trim() || "",
-    product_type: payload.product_type || "RAW",
-    price: sanitizeDecimalPrice(payload.price),
-    stock: Math.max(0, Math.min(2147483647, Number(payload.stock) || 0)),
-    weight_grams: Math.max(0, Math.min(2147483647, Number(payload.weight_grams) || 0)),
-    seo_title: payload.seo_title?.trim().slice(0, 255) || "",
-    seo_description: payload.seo_description?.trim() || "",
-    is_top: Boolean(payload.is_top),
-    related_products: payload.related_products ?? [],
-  };
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit) {
@@ -471,47 +491,122 @@ function normalizeAdminProductImage(image: AdminProductImage) {
 }
 
 function normalizeAdminProduct(product: AdminCatalogProduct) {
+  const primaryImageUrl =
+    readImageUrl(product.primary_image) ??
+    readImageUrl(product.image) ??
+    readImageUrl(product.image_url) ??
+    readImageUrl(product.thumbnail);
+
   return {
     ...product,
-    image: toAbsoluteUrl(product.image),
-    primary_image: toAbsoluteUrl(product.primary_image),
-    image_url: toAbsoluteUrl(product.image_url),
-    thumbnail: toAbsoluteUrl(product.thumbnail),
+    image: primaryImageUrl ?? toAbsoluteUrl(product.image),
+    primary_image: primaryImageUrl ?? toAbsoluteUrl(product.primary_image as string | null | undefined),
+    image_url: primaryImageUrl ?? toAbsoluteUrl(product.image_url),
+    thumbnail: primaryImageUrl ?? toAbsoluteUrl(product.thumbnail),
     images: (product.images ?? []).map(normalizeAdminProductImage),
   };
 }
 
 function buildAdminCategoryBody(payload: AdminCategoryPayload) {
-  const hasFile = typeof File !== "undefined" && payload.image instanceof File;
+  const sanitized = sanitizeAdminCategoryPayload(payload);
+  const hasFile = typeof File !== "undefined" && sanitized.image instanceof File;
 
   if (!hasFile) {
     return JSON.stringify({
-      name: payload.name,
-      slug: payload.slug,
-      description: payload.description,
-      ...(typeof payload.image === "string" && payload.image.trim()
-        ? { image: payload.image.trim() }
+      name: sanitized.name,
+      slug: sanitized.slug,
+      description: sanitized.description,
+      ...(typeof sanitized.image === "string" && sanitized.image.trim()
+        ? { image: sanitized.image.trim() }
         : {}),
     });
   }
 
   const formData = new FormData();
-  const imageFile = payload.image as File;
-  formData.append("name", payload.name);
-  formData.append("slug", payload.slug);
-  formData.append("description", payload.description);
+  const imageFile = sanitized.image as File;
+  formData.append("name", sanitized.name);
+  if (sanitized.slug) {
+    formData.append("slug", sanitized.slug);
+  }
+  if (sanitized.description) {
+    formData.append("description", sanitized.description);
+  }
   formData.append("image", imageFile, imageFile.name);
   return formData;
 }
 
+function readImageUrl(value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const nestedImage = record.image;
+    const nestedUrl = record.url;
+
+    if (typeof nestedImage === "string" && nestedImage.trim()) {
+      return nestedImage;
+    }
+
+    if (typeof nestedUrl === "string" && nestedUrl.trim()) {
+      return nestedUrl;
+    }
+  }
+
+  return null;
+}
+
+function normalizePublicProductImageRecord(
+  image: PublicProductImage,
+  productId: string,
+  index: number
+): AdminProductImage {
+  return {
+    id: image.id ?? `${productId}-${index}`,
+    product: image.product ?? productId,
+    image: toAbsoluteUrl(image.image) ?? image.image ?? "",
+    alt_text: image.alt_text ?? "",
+    is_primary: Boolean(image.is_primary),
+    is_active: image.is_active ?? true,
+    created_at: image.created_at,
+    updated_at: image.updated_at,
+  };
+}
+
+function extractProductImagesFromRecord(product: PublicProductRecord) {
+  const images = (product.images ?? []).map((image, index) =>
+    normalizePublicProductImageRecord(image, product.id, index)
+  );
+
+  if (product.primary_image && typeof product.primary_image === "object") {
+    const primaryImage = normalizePublicProductImageRecord(
+      {
+        ...product.primary_image,
+        is_primary: product.primary_image.is_primary ?? true,
+      },
+      product.id,
+      0
+    );
+
+    if (!images.some((image) => image.id === primaryImage.id)) {
+      images.unshift(primaryImage);
+    }
+  }
+
+  return images.map(normalizeAdminProductImage);
+}
+
 function getPrimaryProductImage(product: PublicProductRecord) {
+  const nestedImages = extractProductImagesFromRecord(product);
+  const primaryFromNested = nestedImages.find((image) => image.is_primary)?.image ?? nestedImages[0]?.image;
+
   return (
-    product.images?.find((image) => image.is_primary)?.image ??
-    product.images?.[0]?.image ??
-    product.primary_image ??
-    product.image ??
-    product.image_url ??
-    product.thumbnail ??
+    primaryFromNested ??
+    readImageUrl(product.primary_image) ??
+    readImageUrl(product.image) ??
+    readImageUrl(product.image_url) ??
+    readImageUrl(product.thumbnail) ??
     null
   );
 }
@@ -528,7 +623,10 @@ function normalizePublicProduct(product: PublicProductRecord): ProductListItem {
     price: product.price,
     compare_at_price: product.compare_at_price ?? null,
     currency: product.currency ?? "FCFA",
-    stock_status: product.stock_status ?? product.is_in_stock ?? "IN_STOCK",
+    stock_status:
+      product.stock_status ??
+      (typeof product.is_in_stock === "string" ? product.is_in_stock : undefined) ??
+      ((product.stock ?? 0) > 0 ? "IN_STOCK" : "OUT_OF_STOCK"),
     category_name: categoryName,
     primary_image: toAbsoluteUrl(getPrimaryProductImage(product)),
     avg_rating: Number(product.note_produit ?? product.avg_rating ?? 0),
@@ -540,6 +638,56 @@ function normalizePublicProduct(product: PublicProductRecord): ProductListItem {
     is_boosted: product.is_boosted ?? false,
     labels: product.labels ?? [],
   };
+}
+
+function mapPublicProductToAdminProduct(product: PublicProductRecord): AdminCatalogProduct {
+  const categoryName =
+    product.category_name ||
+    (product.category && typeof product.category === "object" ? product.category.name : undefined);
+  const images = extractProductImagesFromRecord(product);
+  const primaryImage = toAbsoluteUrl(getPrimaryProductImage(product));
+  const stock = product.stock ?? 0;
+  const stockStatus =
+    typeof product.is_in_stock === "string"
+      ? product.is_in_stock
+      : stock > 0
+        ? "IN_STOCK"
+        : "OUT_OF_STOCK";
+
+  return {
+    id: product.id,
+    name: product.name,
+    slug: product.slug,
+    sku: product.sku ?? product.slug,
+    description: product.description,
+    product_type: product.product_type ?? "RAW",
+    price: product.price,
+    stock,
+    weight_grams: 0,
+    is_in_stock: product.stock_status ?? stockStatus,
+    is_top: product.is_top,
+    category: categoryName ?? null,
+    primary_image: primaryImage,
+    image: primaryImage,
+    image_url: primaryImage,
+    thumbnail: primaryImage,
+    images,
+    note_produit: product.note_produit,
+    count_ratings: product.count_ratings,
+    count_favorites: product.count_favorites,
+  };
+}
+
+async function getPublicCatalogProductsAsAdmin(limit = 200) {
+  const payload = await getFirstWorkingPayload<PublicProductRecord[] | Paginated<PublicProductRecord>>([
+    `/api/v1/catalog/products/?page_size=${limit}`,
+    `/api/catalog/products/?page_size=${limit}`,
+    `/products/?page_size=${limit}`,
+  ]);
+
+  return extractCollection<PublicProductRecord>(payload).map((product) =>
+    normalizeAdminProduct(mapPublicProductToAdminProduct(product))
+  );
 }
 
 function flattenCategories(categories: PublicCategory[]): PublicCategory[] {
@@ -722,30 +870,43 @@ export async function getAdminCategories(token: string) {
   }
 }
 
-export async function getAdminProductVariants(token: string) {
-  const payload = await fetchJson<AdminProductVariant[]>(
-    "/api/v1/catalog/admin/product-variants/",
-    {
-      headers: {
-        Authorization: `Token ${token}`,
-      },
-    }
-  );
+export async function getAdminProductVariants(token?: string | null) {
+  if (!token) {
+    return [];
+  }
 
-  return extractCollection<AdminProductVariant>(payload);
+  try {
+    const payload = await fetchJson<AdminProductVariant[] | Paginated<AdminProductVariant>>(
+      "/api/v1/catalog/admin/product-variants/",
+      {
+        headers: authHeaders(token),
+      }
+    );
+
+    return extractCollection<AdminProductVariant>(payload);
+  } catch (error) {
+    console.warn("Admin product variants indisponibles.", error);
+    return [];
+  }
 }
 
-export async function getAdminProducts(token: string) {
-  const payload = await fetchJson<AdminCatalogProduct[]>(
-    "/api/v1/catalog/admin/products/",
-    {
-      headers: {
-        Authorization: `Token ${token}`,
-      },
-    }
-  );
+export async function getAdminProducts(token?: string | null) {
+  if (token) {
+    try {
+      const payload = await fetchJson<AdminCatalogProduct[] | Paginated<AdminCatalogProduct>>(
+        "/api/v1/catalog/admin/products/",
+        {
+          headers: authHeaders(token),
+        }
+      );
 
-  return extractCollection<AdminCatalogProduct>(payload).map(normalizeAdminProduct);
+      return extractCollection<AdminCatalogProduct>(payload).map(normalizeAdminProduct);
+    } catch (error) {
+      console.warn("Admin products indisponibles, fallback catalogue public.", error);
+    }
+  }
+
+  return getPublicCatalogProductsAsAdmin();
 }
 
 export async function createAdminCategory(token: string, payload: AdminCategoryPayload) {
@@ -808,15 +969,38 @@ export async function createAdminProductImage(token: string, payload: AdminProdu
   return normalizeAdminProductImage(image);
 }
 
-export async function getAdminProductImages(token: string) {
-  const payload = await fetchJson<AdminProductImage[]>(
-    "/api/v1/catalog/admin/product-images/",
-    {
-      headers: authHeaders(token),
+export async function getAdminProductImages(token?: string | null) {
+  if (token) {
+    try {
+      const payload = await fetchJson<AdminProductImage[] | Paginated<AdminProductImage>>(
+        "/api/v1/catalog/admin/product-images/",
+        {
+          headers: authHeaders(token),
+        }
+      );
+
+      return extractCollection<AdminProductImage>(payload).map(normalizeAdminProductImage);
+    } catch (error) {
+      console.warn("Admin product images indisponibles, fallback depuis produits.", error);
     }
+  }
+
+  const products = await getPublicCatalogProductsAsAdmin();
+  const images = products.flatMap((product) =>
+    (product.images ?? []).map((image) =>
+      normalizeAdminProductImage({
+        ...image,
+        product: image.product ?? product.id,
+      })
+    )
   );
 
-  return extractCollection<AdminProductImage>(payload).map(normalizeAdminProductImage);
+  const uniqueImages = new Map<string, AdminProductImage>();
+  for (const image of images) {
+    uniqueImages.set(image.id, image);
+  }
+
+  return [...uniqueImages.values()];
 }
 
 export async function getAdminProductById(token: string, id: string) {
@@ -1145,22 +1329,16 @@ export async function getOrderHistory(token: string, reference: string) {
 
 export async function getAdminOrders(token: string, filters?: OrderFilters) {
   const query = buildQueryString(filters);
-  const payload = await getFirstWorkingPayload<OrderSummary[]>(
-    [
-      `/api/v1/commandes/admin/all-commandes/${query}`,
-      `/api/v1/commandes/admin/${query}`,
-    ],
+  const payload = await fetchJson<OrderSummary[]>(
+    `/api/v1/commandes/admin/all-commandes/${query}`,
     { headers: authHeaders(token) }
   );
   return extractCollection<OrderSummary>(payload);
 }
 
 export async function getAdminOrderByReference(token: string, reference: string) {
-  return getFirstWorkingPayload<OrderDetail>(
-    [
-      `/api/v1/commandes/admin/commandes/${reference}/`,
-      `/api/v1/commandes/admin/${reference}/`,
-    ],
+  return fetchJson<OrderDetail>(
+    `/api/v1/commandes/admin/commandes/${reference}/`,
     { headers: authHeaders(token) }
   );
 }
@@ -1171,11 +1349,8 @@ export async function updateAdminOrderStatus(
   status: string,
   comment?: string
 ) {
-  return fetchMutationFirst<{ status: string; comment?: string }>(
-    [
-      `/api/v1/commandes/admin/commandes/${reference}/status/`,
-      `/api/v1/commandes/admin/${reference}/status/`,
-    ],
+  return fetchMutation<{ status: string; comment?: string }>(
+    `/api/v1/commandes/admin/commandes/${reference}/status/`,
     {
       method: "PATCH",
       body: JSON.stringify({ status, comment }),
@@ -1262,46 +1437,14 @@ export async function validatePromoCode(token: string, code: string, cartTotal: 
   );
 }
 
-// Loyalty (Fidelite) Admin Types
-export type LoyaltyTier = {
-  id: string;
-  name: string;
-  min_points: number;
-  min_solde: string;
-  discount_percent: string;
-};
+// --- Admin wallet & payments ---
 
-export type AdminLoyaltyProfile = {
-  id: string;
-  tier: LoyaltyTier;
-  tier_name: string;
-  points_balance: number;
-  total_points_earned: number;
-  total_solde: string;
-  next_tier: string | null;
-  created_at: string;
-};
-
-export type AdminAdjustPointsPayload = {
-  user_id: string;
-  points: number;
-  reason: string;
-};
-
-export type AdminAdjustPointsResponse = {
-  success: boolean;
-  user_email: string;
-  points_adjusted: number;
-  new_balance: number;
-};
-
-// Wallet (Paiements) Admin Types
 export type AdminWallet = {
   id: string;
   user_email: string;
   user_name: string;
   balance: string;
-  status: "active" | "suspendu" | "blocked";
+  status: "active" | "suspendu" | "blocked" | "inactif";
   created_at: string;
   updated_at: string;
 };
@@ -1321,121 +1464,177 @@ export type AdminTransaction = {
 export type AdminWithdrawPayload = {
   amount: string;
   phone_number: string;
-  description: string;
+  description?: string;
 };
 
-export type AdminWithdrawResponse = {
-  id: string;
-  order: string | null;
-  provider: string;
-  payment_type: string;
-  amount: string;
-  status: string;
-  reference_externe: string;
-  created_at: string;
-};
-
-// Loyalty API functions
-export async function getAdminLoyaltyProfiles(token: string) {
-  const payload = await fetchJson<AdminLoyaltyProfile[]>(
-    "/api/v1/fidelites/admin/profiles/",
-    { headers: authHeaders(token) }
-  );
-  return extractCollection<AdminLoyaltyProfile>(payload);
-}
-
-export async function createAdminLoyaltyProfile(token: string, payload: Partial<AdminLoyaltyProfile>) {
-  return fetchMutation<AdminLoyaltyProfile>("/api/v1/fidelites/admin/profiles/", {
-    method: "POST",
-    body: JSON.stringify(payload),
-    headers: authHeaders(token),
-  });
-}
-
-export async function getAdminLoyaltyProfileById(token: string, id: string) {
-  return fetchJson<AdminLoyaltyProfile>(
-    `/api/v1/fidelites/admin/profiles/${id}/`,
-    { headers: authHeaders(token) }
-  );
-}
-
-export async function updateAdminLoyaltyProfile(token: string, id: string, payload: Partial<AdminLoyaltyProfile>) {
-  return fetchMutation<AdminLoyaltyProfile>(`/api/v1/fidelites/admin/profiles/${id}/`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-    headers: authHeaders(token),
-  });
-}
-
-export async function patchAdminLoyaltyProfile(token: string, id: string, payload: Partial<AdminLoyaltyProfile>) {
-  return fetchMutation<AdminLoyaltyProfile>(`/api/v1/fidelites/admin/profiles/${id}/`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-    headers: authHeaders(token),
-  });
-}
-
-export async function deleteAdminLoyaltyProfile(token: string, id: string) {
-  await fetchMutation<void>(`/api/v1/fidelites/admin/profiles/${id}/`, {
-    method: "DELETE",
-    headers: authHeaders(token),
-  });
-}
-
-export async function adjustAdminLoyaltyPoints(token: string, payload: AdminAdjustPointsPayload) {
-  return fetchMutation<AdminAdjustPointsResponse>("/api/v1/fidelites/admin/profiles/adjust_points/", {
-    method: "POST",
-    body: JSON.stringify(payload),
-    headers: authHeaders(token),
-  });
-}
-
-export async function getLoyaltyTiers(token: string) {
-  const payload = await fetchJson<LoyaltyTier[]>(
-    "/api/v1/fidelites/liste-des-grades/",
-    { headers: authHeaders(token) }
-  );
-  return extractCollection<LoyaltyTier>(payload);
-}
-
-// Wallet API functions
 export async function getAdminAllWallets(token: string) {
-  const payload = await fetchJson<AdminWallet[]>(
-    "/api/v1/paiements/admin/all-wallets/",
+  const payload = await getFirstWorkingPayload<AdminWallet[]>(
+    ["/api/v1/paiements/admin/all-wallets/", "/api/v1/paiements/admin/wallets/"],
     { headers: authHeaders(token) }
   );
   return extractCollection<AdminWallet>(payload);
 }
 
 export async function getAdminAllTransactions(token: string) {
-  const payload = await fetchJson<AdminTransaction[]>(
-    "/api/v1/paiements/admin/all-transactions/",
+  const payload = await getFirstWorkingPayload<AdminTransaction[]>(
+    [
+      "/api/v1/paiements/admin/all-transactions/",
+      "/api/v1/paiements/admin/transactions/",
+    ],
     { headers: authHeaders(token) }
   );
   return extractCollection<AdminTransaction>(payload);
 }
 
+export async function updateAdminWalletStatus(
+  token: string,
+  walletId: string,
+  status: AdminWallet["status"]
+) {
+  return fetchMutationFirst<AdminWallet>(
+    [
+      `/api/v1/paiements/admin/wallets/${walletId}/status/`,
+      `/api/v1/paiements/admin/wallets/${walletId}/`,
+    ],
+    {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+      headers: authHeaders(token),
+    }
+  );
+}
+
 export async function adminWithdrawFunds(token: string, payload: AdminWithdrawPayload) {
-  return fetchMutation<AdminWithdrawResponse>("/api/v1/paiements/admin/retrait-fonds/", {
-    method: "POST",
-    body: JSON.stringify(payload),
-    headers: authHeaders(token),
-  });
+  return fetchMutationFirst<Record<string, unknown>>(
+    ["/api/v1/paiements/admin/retrait-fonds/", "/api/v1/paiements/admin/withdraw/"],
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: authHeaders(token),
+    }
+  );
 }
 
-export async function updateAdminWalletStatus(token: string, walletId: string, status: "active" | "suspendu" | "blocked") {
-  return fetchMutation<AdminWallet>(`/api/v1/paiements/admin/wallets/${walletId}/status/`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-    headers: authHeaders(token),
-  });
+// --- Admin loyalty ---
+
+export type LoyaltyTier = {
+  id: string;
+  name: string;
+  min_points: number;
+  min_solde: string;
+  discount_percent: string;
+};
+
+export type AdminLoyaltyProfile = {
+  id: string;
+  tier?: LoyaltyTier | null;
+  tier_name?: string;
+  points_balance: number;
+  total_points_earned: number;
+  total_solde: string;
+  next_tier?: string | null;
+  created_at?: string;
+  user_email?: string;
+  user_name?: string;
+};
+
+export type AdminAdjustPointsPayload = {
+  user_id: string;
+  points: number;
+  reason: string;
+};
+
+export type AdminLoyaltyProfilePayload = Record<string, unknown>;
+
+export async function getAdminLoyaltyProfiles(token: string) {
+  const payload = await getFirstWorkingPayload<AdminLoyaltyProfile[]>(
+    [
+      "/api/v1/fidelites/admin/profiles/",
+      "/api/v1/loyalty/admin/profiles/",
+    ],
+    { headers: authHeaders(token) }
+  );
+  return extractCollection<AdminLoyaltyProfile>(payload);
 }
 
-export async function refundOrderAdmin(token: string, orderId: string) {
-  return fetchMutation<{ detail: string; refunded_payments: any[] }>("/api/v1/paiements/remboursement-commande/", {
-    method: "POST",
-    body: JSON.stringify({ order_id: orderId }),
-    headers: authHeaders(token),
-  });
+export async function getLoyaltyTiers(token: string) {
+  const payload = await getFirstWorkingPayload<LoyaltyTier[]>(
+    [
+      "/api/v1/fidelites/liste-des-grades/",
+      "/api/v1/fidelites/tiers/",
+      "/api/v1/loyalty/tiers/",
+    ],
+    { headers: authHeaders(token) }
+  );
+  return extractCollection<LoyaltyTier>(payload);
 }
 
+export async function createAdminLoyaltyProfile(
+  token: string,
+  payload: AdminLoyaltyProfilePayload
+) {
+  return fetchMutationFirst<AdminLoyaltyProfile>(
+    [
+      "/api/v1/fidelites/admin/profiles/",
+      "/api/v1/loyalty/admin/profiles/",
+    ],
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: authHeaders(token),
+    }
+  );
+}
+
+export async function patchAdminLoyaltyProfile(
+  token: string,
+  id: string,
+  payload: AdminLoyaltyProfilePayload
+) {
+  return fetchMutationFirst<AdminLoyaltyProfile>(
+    [
+      `/api/v1/fidelites/admin/profiles/${id}/`,
+      `/api/v1/loyalty/admin/profiles/${id}/`,
+    ],
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+      headers: authHeaders(token),
+    }
+  );
+}
+
+export async function deleteAdminLoyaltyProfile(token: string, id: string) {
+  await fetchMutationFirst<void>(
+    [
+      `/api/v1/fidelites/admin/profiles/${id}/`,
+      `/api/v1/loyalty/admin/profiles/${id}/`,
+    ],
+    {
+      method: "DELETE",
+      headers: authHeaders(token),
+    }
+  );
+}
+
+export async function adjustAdminLoyaltyPoints(
+  token: string,
+  payload: AdminAdjustPointsPayload
+) {
+  return fetchMutationFirst<{
+    success: boolean;
+    user_email?: string;
+    points_adjusted?: number;
+    new_balance?: number;
+  }>(
+    [
+      "/api/v1/fidelites/admin/profiles/adjust_points/",
+      "/api/v1/loyalty/admin/profiles/adjust_points/",
+    ],
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: authHeaders(token),
+    }
+  );
+}

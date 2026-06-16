@@ -11,7 +11,7 @@ import {
   updateAdminCategory,
   type AdminCategory,
 } from "@/lib/ecommerce-api";
-import { readApiError } from "@/lib/utils";
+import { readApiError, sanitizeApiSlug } from "@/lib/utils";
 
 interface CategoryFormState {
   name: string;
@@ -32,14 +32,7 @@ const INITIAL_FORM: CategoryFormState = {
 };
 
 function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50);
+  return sanitizeApiSlug(value);
 }
 
 function hasChildren(category: AdminCategory) {
@@ -130,14 +123,23 @@ export default function CategoriesSection() {
   };
 
   const handleSave = async () => {
-    if (!session?.token) return;
+    if (!session?.token) {
+      setError("Connecte-toi avec un compte admin pour creer une categorie.");
+      return;
+    }
+
+    if (!form.name.trim()) {
+      setError("Le champ name est obligatoire (max 100 caracteres).");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
       const payload = {
-        name: form.name.trim(),
+        name: form.name.trim().slice(0, 100),
         slug: form.slug.trim() || slugify(form.name),
-        description: form.description.trim(),
+        description: form.description.trim() || null,
         ...(form.imageFile ? { image: form.imageFile } : {}),
       };
 
@@ -184,7 +186,9 @@ export default function CategoriesSection() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Categories</h1>
-          <p className="text-sm text-slate-500">{categories.length} categorie(s) enregistree(s)</p>
+          <p className="text-sm text-slate-500">
+           
+          </p>
         </div>
         <button
           onClick={openCreateModal}
@@ -284,23 +288,31 @@ export default function CategoriesSection() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">Nom *</label>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                    name * <span className="text-slate-400">(max 100)</span>
+                  </label>
                   <input
                     value={form.name}
+                    maxLength={100}
                     onChange={(e) => handleChange("name", e.target.value)}
                     className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">Slug *</label>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                    slug <span className="text-slate-400">(max 50, pattern ^[-a-zA-Z0-9_]+$)</span>
+                  </label>
                   <input
                     value={form.slug}
+                    maxLength={50}
                     onChange={(e) => handleChange("slug", e.target.value)}
                     className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-500">Description</label>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                    description <span className="text-slate-400">(nullable)</span>
+                  </label>
                   <textarea
                     rows={4}
                     value={form.description}
@@ -310,7 +322,7 @@ export default function CategoriesSection() {
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-500">
-                    Image de categorie
+                    image <span className="text-slate-400">(fichier multipart ou URI)</span>
                   </label>
                   <div className="flex items-center gap-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3">
                     <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white text-slate-400">
@@ -349,7 +361,7 @@ export default function CategoriesSection() {
                 </button>
                 <button
                   onClick={handleSave}
-                  disabled={saving || !form.name.trim() || !form.slug.trim()}
+                  disabled={saving || !form.name.trim()}
                   className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

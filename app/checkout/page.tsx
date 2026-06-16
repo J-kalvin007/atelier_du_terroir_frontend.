@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuthSession } from "@/components/auth/useAuthSession";
@@ -24,11 +24,22 @@ export default function CheckoutPage() {
     notes: "",
   });
 
+  useEffect(() => {
+    if (session?.role === "admin") {
+      router.replace("/admin");
+    }
+  }, [router, session?.role]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!session) {
       router.push("/login?redirect=/checkout");
+      return;
+    }
+
+    if (session.role === "admin") {
+      setError("Le checkout est reserve aux comptes client. Utilise un compte client ou deconnecte-toi.");
       return;
     }
 
@@ -50,7 +61,7 @@ export default function CheckoutPage() {
       });
       clearCart();
       if (order.reference) {
-        router.push(`/client?order=${order.reference}`);
+        router.push(`/?order=${order.reference}`);
       } else {
         router.push("/products?checkout=success");
       }

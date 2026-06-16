@@ -82,6 +82,31 @@ export function getOrderStatusLabel(status: string, locale: string = "fr"): stri
   return labels[normalized]?.[locale] || status;
 }
 
+/** Slug conforme Swagger : max 50, pattern ^[-a-zA-Z0-9_]+$ */
+export function sanitizeApiSlug(value: string, fallbackName = ""): string {
+  const source = value.trim() || fallbackName.trim();
+  const slug = source
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/_{2,}/g, "_")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 50);
+
+  if (slug) {
+    return slug;
+  }
+
+  return "item";
+}
+
+/** Prix decimal Swagger : ^-?\d{0,10}(?:\.\d{0,2})?$ */
+export function sanitizeDecimalPrice(value: string): string {
+  const normalized = value.trim().replace(/\s/g, "").replace(/,/g, ".");
+  const match = normalized.match(/^-?\d{0,10}(?:\.\d{0,2})?/);
+  return match?.[0] || "0";
+}
+
 export function parseApiErrorPayload(payload: unknown, fallback: string) {
   if (!payload || typeof payload !== "object") {
     return fallback;
@@ -117,11 +142,7 @@ export function parseApiErrorPayload(payload: unknown, fallback: string) {
     }
   }
 
-  if (fieldErrors.length > 0) {
-    return fieldErrors.join(" | ");
-  }
-
-  return fallback;
+  return fieldErrors.length > 0 ? fieldErrors.join(" | ") : fallback;
 }
 
 export function readApiError(error: unknown, fallback: string) {
@@ -151,4 +172,15 @@ export function readApiError(error: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+export function isPermissionDeniedError(error: unknown) {
+  const message = readApiError(error, "").toLowerCase();
+
+  return (
+    message.includes("403") ||
+    message.includes("acces refuse") ||
+    message.includes("permission") ||
+    message.includes("you do not have permission")
+  );
 }

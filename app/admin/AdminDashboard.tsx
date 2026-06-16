@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
-import { clearSession } from "@/lib/auth";
+import {
+  buildAdminReturnPath,
+  getSessionRoleLabel,
+  hasAdminAccess,
+  logout,
+  refreshSessionFromProfile,
+} from "@/lib/auth";
+import type { AuthSession } from "@/lib/auth";
 import AdminShell from "./components/AdminShell";
+import AdminLoginPage from "./components/AdminLoginPage";
 import OverviewSection from "./components/OverviewSection";
 import ProductsSection from "./components/ProductsSection";
 import CategoriesSection from "./components/CategoriesSection";
@@ -49,80 +56,52 @@ const SECTIONS: AdminSectionId[] = [
   "settings",
 ];
 
-function AccessDeniedSection({
-  roleLabel,
-  isAuthenticated,
+function AdminRoleBanner({
+  session,
+  onSwitchAccount,
 }: {
-  roleLabel: string;
-  isAuthenticated: boolean;
+  session: AuthSession;
+  onSwitchAccount: () => void;
 }) {
-  const router = useRouter();
+  const roleLabel = getSessionRoleLabel(session);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Acces admin requis</h1>
-        <p className="text-sm text-slate-500">
-          Cette page suit maintenant la logique de ton ancien projet: l&apos;entree `/admin`
-          reste visible, puis la connexion admin se fait depuis ici.
-        </p>
-      </div>
-
-      <div className="rounded-3xl border border-[#ead8c3] bg-white/90 p-8 shadow-sm">
-        <div className="space-y-4">
-          <div className="inline-flex rounded-full border border-[#e7d8c5] bg-[#fbf5ed] px-4 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-[#8b5e34]">
-            Dashboard administrateur
-          </div>
-          <h2 className="text-xl font-semibold text-slate-900">
-            Connecte-toi avec un compte ayant le role admin backend.
-          </h2>
-          <p className="max-w-2xl text-sm leading-7 text-slate-600">
-            Le backend doit renvoyer un role admin comme `platform_admin`, ou un attribut
-            equivalent comme `is_staff` ou `admin_role`.
-          </p>
-
-          <div className="rounded-2xl border border-[#f0e3d5] bg-[#fffaf5] px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b5e34]">
-              Role detecte actuellement
-            </p>
-            <p className="mt-2 text-base font-semibold text-slate-900">{roleLabel}</p>
-          </div>
-
-          <div className="flex flex-wrap gap-3 pt-2">
-            {isAuthenticated ? (
-              <button
-                type="button"
-                className="rounded-2xl bg-[#8b5e34] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#744b27]"
-                onClick={() => {
-                  clearSession();
-                  router.replace("/admin");
-                }}
-              >
-                Deconnexion
-              </button>
-            ) : (
-              <Link
-                href="/login?redirect=/admin"
-                className="rounded-2xl bg-[#1f4d3f] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#17392f]"
-              >
-                Se connecter en admin
-              </Link>
-            )}
-          </div>
-        </div>
+    <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-950">
+      <p className="font-semibold">Compte connecte sans droits admin detectes</p>
+      <p className="mt-2 leading-6 text-amber-900/90">
+        Role actuel : <strong>{roleLabel}</strong>. Tu peux parcourir le dashboard, mais les
+        creations peuvent etre refusees par l&apos;API sans le role{" "}
+        <strong>platform_admin</strong>.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={onSwitchAccount}
+          className="inline-flex rounded-xl bg-[#1f4d3f] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#17392f]"
+        >
+          Changer de compte
+        </button>
+        <Link
+          href="/"
+          className="inline-flex rounded-xl border border-[#8b5e34] px-4 py-2 text-xs font-semibold text-[#8b5e34] transition hover:bg-[#f8ecdf]"
+        >
+          Retour boutique
+        </Link>
       </div>
     </div>
   );
 }
 
 export default function AdminDashboard() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const session = useAuthSession();
+  const refreshedTokenRef = useRef<string | null>(null);
+  const [refreshingRole, setRefreshingRole] = useState(false);
   const sectionParam = searchParams.get("section");
   const initialSection: AdminSectionId = isAdminSection(sectionParam) ? sectionParam : "overview";
   const [section, setSection] = useState<AdminSectionId>(initialSection);
 
-  // Sync state section when search query changes
   useEffect(() => {
     const currentSection = searchParams.get("section");
     if (isAdminSection(currentSection)) {
@@ -132,9 +111,59 @@ export default function AdminDashboard() {
     }
   }, [searchParams]);
 
-  // We bypass the role block to always display the section pages as requested
+  useEffect(() => {
+    if (!session?.token || refreshedTokenRef.current === session.token) {
+      return;
+    }
+
+    refreshedTokenRef.current = session.token;
+    setRefreshingRole(true);
+
+    void refreshSessionFromProfile(session)
+      .catch(() => undefined)
+      .finally(() => {
+        setRefreshingRole(false);
+      });
+  }, [session]);
+
+  const adminAccess = hasAdminAccess(session);
+  const adminReturnPath = buildAdminReturnPath(section);
+
+  async function handleSwitchAccount() {
+    if (session?.token) {
+      await logout(session);
+    }
+
+    router.replace(adminReturnPath);
+  }
+
+  if (!session?.token) {
+    return <AdminLoginPage section={section} />;
+  }
+
   return (
-    <AdminShell activeSection={section} onSectionChange={setSection}>
+    <AdminShell
+      activeSection={section}
+      onSectionChange={setSection}
+      adminReturnPath={adminReturnPath}
+      onLogout={() => void handleSwitchAccount()}
+    >
+      {refreshingRole ? (
+        <div className="mb-4 rounded-xl border border-[#eadfce] bg-white px-4 py-3 text-sm text-slate-500">
+          Verification du role administrateur...
+        </div>
+      ) : null}
+        {!adminAccess ? (
+          <AdminRoleBanner session={session} onSwitchAccount={() => void handleSwitchAccount()} />
+        ) : (
+          <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
+            <p className="font-semibold">Session administrateur active</p>
+            <p className="mt-2 leading-6 text-emerald-900/90">
+              Role : <strong>{getSessionRoleLabel(session)}</strong>. Tu peux gerer toutes les
+              sections du dashboard et naviguer vers la boutique client via le menu lateral.
+            </p>
+          </div>
+        )}
       {renderSection(section)}
     </AdminShell>
   );

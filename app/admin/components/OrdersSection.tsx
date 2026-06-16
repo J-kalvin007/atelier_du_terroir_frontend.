@@ -13,12 +13,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
+import { AdminAccessNotice } from "@/components/admin/AdminAccessNotice";
+import { hasAdminAccess } from "@/lib/auth";
 import {
   getAdminOrders,
   updateAdminOrderStatus,
   type OrderSummary,
 } from "@/lib/ecommerce-api";
-import { cn, formatCurrency, getOrderStatusLabel, readApiError } from "@/lib/utils";
+import { cn, formatCurrency, getOrderStatusLabel, isPermissionDeniedError, readApiError } from "@/lib/utils";
 
 const STATUS_CONFIG: Record<
   string,
@@ -62,20 +64,39 @@ export default function OrdersSection() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [updatingRef, setUpdatingRef] = useState<string | null>(null);
 
   const fetchOrders = async () => {
-    if (!session) return;
+    if (!session?.token) return;
 
     setLoading(true);
     setError(null);
+    setPermissionDenied(false);
+
+    if (!hasAdminAccess(session)) {
+      setOrders([]);
+      setPermissionDenied(true);
+      setLoading(false);
+      return;
+    }
 
     try {
       const data = await getAdminOrders(session.token);
       setOrders(data);
     } catch (err) {
       console.warn("Erreur fetch orders", err);
-      setError(readApiError(err, "Impossible de charger les commandes."));
+      if (isPermissionDeniedError(err)) {
+        setPermissionDenied(true);
+        setError(
+          readApiError(
+            err,
+            "Acces refuse : role platform_admin requis pour voir toutes les commandes."
+          )
+        );
+      } else {
+        setError(readApiError(err, "Impossible de charger les commandes."));
+      }
       setOrders([]);
     } finally {
       setLoading(false);
@@ -117,11 +138,18 @@ export default function OrdersSection() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Commandes</h1>
         <p className="text-sm text-slate-500">
-          Liste depuis `/api/v1/commandes/admin/all-commandes/`
+          Liste depuis `/api/v1/commandes/admin/all-commandes/` (role platform_admin requis)
         </p>
       </div>
 
-      {error ? (
+      {permissionDenied ? (
+        <AdminAccessNotice
+          title="Droits admin insuffisants pour les commandes"
+          description="Endpoint /api/v1/commandes/admin/all-commandes/ — role platform_admin requis."
+        />
+      ) : null}
+
+      {error && !permissionDenied ? (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
           {error}
         </div>

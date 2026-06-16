@@ -4,8 +4,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
-import { logout } from "@/lib/auth";
+import { buildAdminReturnPath, hasAdminAccess, logout } from "@/lib/auth";
 import type { AdminSectionId } from "../AdminDashboard";
+
+const CLIENT_LINKS = [
+  { label: "Boutique accueil", href: "/" },
+  { label: "Catalogue produits", href: "/products" },
+  { label: "Mon compte client", href: "/account" },
+  { label: "Panier / checkout", href: "/checkout" },
+];
 
 const NAV_ITEMS: Array<{ id: AdminSectionId; label: string; icon: string; href: string }> = [
   { id: "analytics", label: "Analytics", icon: "#", href: "/admin?section=analytics" },
@@ -25,16 +32,21 @@ const NAV_ITEMS: Array<{ id: AdminSectionId; label: string; icon: string; href: 
 export default function AdminShell({
   activeSection,
   onSectionChange,
+  adminReturnPath,
+  onLogout,
   children,
 }: {
   activeSection: AdminSectionId;
   onSectionChange: (section: AdminSectionId) => void;
+  adminReturnPath?: string;
+  onLogout?: () => void;
   children: React.ReactNode;
 }) {
   const router = useRouter();
   const session = useAuthSession();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const returnPath = adminReturnPath ?? buildAdminReturnPath(activeSection);
 
   const displayName =
     session?.user.firstName ||
@@ -50,13 +62,18 @@ export default function AdminShell({
   }
 
   function handleLogout() {
-    if (!session) {
-      router.replace("/login?redirect=/admin");
+    if (onLogout) {
+      onLogout();
+      return;
+    }
+
+    if (!session?.token) {
+      router.replace(returnPath);
       return;
     }
 
     void logout(session).then(() => {
-      router.replace("/login?redirect=/admin");
+      router.replace(returnPath);
     });
   }
 
@@ -127,6 +144,28 @@ export default function AdminShell({
         </nav>
 
         {!collapsed ? (
+          <div className="border-t border-[#eadfce] px-2 py-3">
+            <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+              Espace client
+            </p>
+            <div className="space-y-1">
+              {CLIENT_LINKS.map((link) => (
+                <Link
+                  key={link.href + link.label}
+                  href={link.href}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-[#fcf7f1] hover:text-[#8b5e34]"
+                >
+                  <span className="flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-md bg-[#eef6f1] text-[10px] font-bold text-[#1f4d3f]">
+                    B
+                  </span>
+                  <span>{link.label}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {!collapsed ? (
           <div className="border-t border-[#eadfce] p-3">
             <div className="flex items-center gap-3 rounded-xl bg-[#fcfaf7] p-3 shadow-sm">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1f4d3f] text-xs font-bold text-white">
@@ -135,15 +174,16 @@ export default function AdminShell({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-medium text-slate-900">{displayName}</p>
                 <p className="truncate text-[10px] uppercase tracking-[0.18em] text-slate-500">
-                  {session?.role === "admin" ? "Administrateur" : "Connexion requise"}
+                  {hasAdminAccess(session) ? "Administrateur" : "Compte connecte"}
                 </p>
               </div>
               <button
                 className="rounded-lg p-2 text-slate-400 transition hover:bg-[#fff4ea] hover:text-[#8b5e34]"
                 type="button"
                 onClick={handleLogout}
+                title="Se deconnecter"
               >
-                {session ? "Out" : "In"}
+                Out
               </button>
             </div>
           </div>
@@ -189,6 +229,23 @@ export default function AdminShell({
                 </button>
               ))}
             </nav>
+            <div className="border-t border-[#eadfce] px-2 py-3">
+              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                Espace client
+              </p>
+              <div className="space-y-1">
+                {CLIENT_LINKS.map((link) => (
+                  <Link
+                    key={link.href + link.label}
+                    href={link.href}
+                    onClick={() => setMobileOpen(false)}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-[#fcf7f1] hover:text-[#8b5e34]"
+                  >
+                    <span>{link.label}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
           </aside>
         </div>
       ) : null}
