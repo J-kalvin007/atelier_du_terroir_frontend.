@@ -61,25 +61,22 @@ function buildRoleMismatchMessage(actualRole: UserRole, expectedRole: UserRole) 
 }
 
 type TokenResponse = {
-  token?: string;
+  
   key?: string;
   user?: Record<string, unknown>;
-  [key: string]: unknown;
+ 
 };
 
 const STORAGE_KEY = "atelier-du-terroir-auth-v3";
 const SESSION_EVENT = "atelier-du-terroir-auth-change";
-const API_BASE_URL = readEnv("NEXT_PUBLIC_API_BASE_URL", "NEXT_PUBLIC_API_URL");
+const API_BASE_URL =
+  readEnv("NEXT_PUBLIC_API_BASE_URL", "NEXT_PUBLIC_API_URL") ?? "http://localhost:8000";
 const TOKEN_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_TOKEN_ENDPOINT") ?? "/api/connexion/";
 const PROFILE_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_ME_ENDPOINT") ?? "/api/users/me/";
 const AUTH_USER_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_USER_ENDPOINT") ?? "/api/auth/user/";
 const LOGOUT_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_LOGOUT_ENDPOINT") ?? "/api/auth/logout/";
 const REGISTER_ENDPOINT = readEnv("NEXT_PUBLIC_AUTH_REGISTER_ENDPOINT") ?? "/api/auth/registration/";
-const PROXY_TOKEN_ENDPOINT = "/api/frontend-auth/login";
-const PROXY_PROFILE_ENDPOINT = "/api/frontend-auth/profile";
-const PROXY_ME_ENDPOINT = "/api/frontend-auth/me";
-const PROXY_USER_ENDPOINT = "/api/frontend-auth/user";
-const PROXY_REGISTER_ENDPOINT = "/api/frontend-auth/register";
+
 
 type RegisterPayload = {
   name: string;
@@ -90,8 +87,9 @@ type RegisterPayload = {
 
 type LoginPayload = {
   password: string;
-  name?: string;
+  username?: string;
   email?: string;
+  name?: string;
 };
 
 let sessionCache: AuthSession | null | undefined;
@@ -146,6 +144,7 @@ const AUTH_FIELD_LABELS: Record<string, string> = {
   email: "Email",
   name: "Nom",
   username: "Identifiant",
+  non_field_errors: "Connexion",
 };
 
 function translateAuthValidationMessage(message: string) {
@@ -171,12 +170,20 @@ function translateAuthValidationMessage(message: string) {
     return "Les mots de passe ne correspondent pas.";
   }
 
-  if (/valid email/i.test(normalized)) {
-    return "Adresse email invalide.";
+  if (/valid email|adresse e-mail valide/i.test(normalized)) {
+    return "Adresse email invalide. Utilise le format nom@domaine.com.";
   }
 
   if (/already exists|already registered|deja utilise|already taken/i.test(normalized)) {
     return "Cette adresse email est deja utilisee.";
+  }
+
+  if (/unable to log in with provided credentials/i.test(normalized)) {
+    return "Email ou mot de passe incorrect. Verifie tes identifiants ou cree un compte.";
+  }
+
+  if (/must include "email" and "password"/i.test(normalized)) {
+    return "Utilise ton adresse email (pas seulement un pseudo) pour te connecter.";
   }
 
   return normalized;
@@ -251,6 +258,10 @@ async function parseJsonSafely(response: Response) {
 }
 
 function shouldRetryDirectly(payload: Record<string, unknown> | null, responseStatus?: number) {
+  if (responseStatus === 404 || responseStatus === 502 || responseStatus === 503) {
+    return true;
+  }
+
   if (!payload) {
     return responseStatus === 500;
   }
@@ -260,41 +271,22 @@ function shouldRetryDirectly(payload: Record<string, unknown> | null, responseSt
 }
 
 async function fetchThroughProxyThenDirect(
-  proxyPath: string,
+  _proxyPath: string,
   backendPath: string,
   init: RequestInit
 ) {
-  const baseHeaders = new Headers(init.headers);
+  const headers = new Headers(init.headers);
+  headers.set("ngrok-skip-browser-warning", "true");
+  headers.set("Accept", headers.get("Accept") ?? "application/json");
 
-  const proxyResponse = await fetch(buildProxyUrl(proxyPath), {
+  const response = await fetch(buildApiUrl(backendPath), {
     ...init,
-    headers: baseHeaders,
+    headers,
   });
 
-  const proxyPayload = proxyResponse.ok ? null : await parseJsonSafely(proxyResponse);
+  const payload = response.ok ? null : await parseJsonSafely(response);
 
-  if (proxyResponse.ok || !shouldRetryDirectly(proxyPayload, proxyResponse.status)) {
-    return {
-      response: proxyResponse,
-      payload: proxyPayload,
-    };
-  }
-
-  const directHeaders = new Headers(init.headers);
-  directHeaders.set("ngrok-skip-browser-warning", "true");
-  directHeaders.set("Accept", directHeaders.get("Accept") ?? "application/json");
-
-  const directResponse = await fetch(buildApiUrl(backendPath), {
-    ...init,
-    headers: directHeaders,
-  });
-
-  const directPayload = directResponse.ok ? null : await parseJsonSafely(directResponse);
-
-  return {
-    response: directResponse,
-    payload: directPayload,
-  };
+  return { response, payload };
 }
 
 function readStringArray(value: unknown) {
@@ -585,7 +577,7 @@ function normalizeUser(data: Record<string, unknown>): AuthUser {
 async function requestProfile(token: string) {
   for (const scheme of ["Token", "Bearer"] as const) {
     const { response } = await fetchThroughProxyThenDirect(
-      PROXY_PROFILE_ENDPOINT,
+      PROFILE_ENDPOINT,
       PROFILE_ENDPOINT,
       {
         method: "GET",
@@ -617,11 +609,7 @@ async function requestProfile(token: string) {
 
 async function fetchProfileSource(token: string, backendPath: string) {
   for (const scheme of ["Token", "Bearer"] as const) {
-    const proxyPath = backendPath.includes("/auth/user/")
-      ? PROXY_USER_ENDPOINT
-      : PROXY_ME_ENDPOINT;
-
-    const { response } = await fetchThroughProxyThenDirect(proxyPath, backendPath, {
+    const { response } = await fetchThroughProxyThenDirect(backendPath, backendPath, {
       method: "GET",
       headers: getAuthHeaders(token, scheme),
     });
@@ -638,26 +626,39 @@ async function fetchProfileSource(token: string, backendPath: string) {
   return null;
 }
 
-function buildLoginPayload(identifier: string, password: string): LoginPayload {
-  const normalizedIdentifier = identifier.trim();
+function normalizeLoginIdentifier(identifier: string) {
+  return identifier
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .toLowerCase();
+}
 
-  if (normalizedIdentifier.includes("@")) {
-    return {
-      name: normalizedIdentifier,
-      email: normalizedIdentifier,
-      password,
-    };
+function isValidLoginEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function buildLoginPayload(identifier: string, password: string): LoginPayload {
+  const normalizedIdentifier = normalizeLoginIdentifier(identifier);
+
+  if (!isValidLoginEmail(normalizedIdentifier)) {
+    throw new Error(
+      "Utilise ton adresse email complete (ex. yan@gmail.com) pour te connecter."
+    );
   }
 
   return {
-    name: normalizedIdentifier,
+    email: normalizedIdentifier,
     password,
   };
 }
 
-export async function login(identifier: string, password: string, options?: LoginOptions) {
+export async function login(
+  identifier: string,
+  password: string,
+  options?: LoginOptions
+): Promise<AuthSession> {
   const { response, payload } = await fetchThroughProxyThenDirect(
-    PROXY_TOKEN_ENDPOINT,
+    TOKEN_ENDPOINT,
     TOKEN_ENDPOINT,
     {
       method: "POST",
@@ -671,15 +672,12 @@ export async function login(identifier: string, password: string, options?: Logi
   if (!response.ok) {
     throw new Error(
       (payload ? readErrorMessage(payload) : null) ??
-        (await parseErrorResponse(
-          response,
-          "Identifiants invalides. Verifie le nom d'utilisateur et le mot de passe."
-        ))
+        "Identifiants invalides. Verifie le nom d'utilisateur et le mot de passe."
     );
   }
 
   const tokenPayload = (await response.json()) as TokenResponse;
-  const token = readString(tokenPayload.token) ?? readString(tokenPayload.key);
+  const token = readString(tokenPayload.key);
 
   if (!token) {
     throw new Error("L'API de connexion n'a pas renvoye de token exploitable.");
@@ -689,19 +687,15 @@ export async function login(identifier: string, password: string, options?: Logi
   const loginUserRecord =
     loginUser && typeof loginUser === "object" ? (loginUser as Record<string, unknown>) : null;
 
-  let profilePayload: Record<string, unknown> | null = null;
+  const session = buildAuthSessionFromLogin(
+    token,
+    tokenPayload,
+    loginUserRecord,
+    loginUserRecord
+  );
 
-  try {
-    profilePayload = await requestProfile(token);
-  } catch {
-    profilePayload = loginUserRecord;
-  }
-
-  const session = buildAuthSessionFromLogin(token, tokenPayload, profilePayload, loginUserRecord);
-  const role = session.role;
-
-  if (options?.expectedRole && role !== options.expectedRole) {
-    throw new AuthRoleMismatchError(role, options.expectedRole);
+  if (options?.expectedRole && session.role !== options.expectedRole) {
+    throw new AuthRoleMismatchError(session.role, options.expectedRole);
   }
 
   persistSession(session);
@@ -782,7 +776,7 @@ export async function updateUserProfile(session: AuthSession, payload: UserProfi
   }
 
   const { response, payload: errorPayload } = await fetchThroughProxyThenDirect(
-    PROXY_USER_ENDPOINT,
+    AUTH_USER_ENDPOINT,
     AUTH_USER_ENDPOINT,
     {
       method: "PATCH",
@@ -806,7 +800,7 @@ export async function updateUserProfile(session: AuthSession, payload: UserProfi
 
 export async function register(payload: RegisterPayload) {
   const { response, payload: errorPayload } = await fetchThroughProxyThenDirect(
-    PROXY_REGISTER_ENDPOINT,
+    REGISTER_ENDPOINT,
     REGISTER_ENDPOINT,
     {
       method: "POST",
@@ -931,6 +925,42 @@ export function hasAdminAccess(session: AuthSession | null | undefined) {
   );
 }
 
+export async function validateSessionToken(session: AuthSession): Promise<boolean> {
+  try {
+    const { response } = await fetchThroughProxyThenDirect(
+      PROFILE_ENDPOINT,
+      PROFILE_ENDPOINT,
+      {
+        method: "GET",
+        headers: getAuthHeaders(session.token, "Token"),
+      }
+    );
+
+    if (response.ok) {
+      return true;
+    }
+
+    const text = await response.text();
+
+    if (response.status === 401) {
+      clearSession();
+      return false;
+    }
+
+    if (
+      response.status === 403 &&
+      /invalid token|token non valide|authentication credentials/i.test(text)
+    ) {
+      clearSession();
+      return false;
+    }
+
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 export function getDashboardPath(role: UserRole) {
   return role === "admin" ? "/admin" : "/";
 }
@@ -960,14 +990,14 @@ export function resolveAuthRedirectPath(session: AuthSession, requestedRedirect:
   }
 
   if (safeRedirect?.startsWith("/admin")) {
-    return safeRedirect;
+    return "/";
   }
 
   if (safeRedirect) {
     return safeRedirect;
   }
 
-  return "/";
+  return "/dashboard";
 }
 
 export function applyPostLoginRedirect(session: AuthSession, requestedRedirect?: string | null) {

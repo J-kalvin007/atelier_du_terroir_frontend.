@@ -1,148 +1,229 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { pimentHeroImage, poivronsImage, tomateHeroImage } from "@/assets/images";
+import Image from "next/image";
+import { motion, AnimatePresence } from "framer-motion";
+import { ArrowRight, Play, Sparkles, Leaf, Award, Heart } from "lucide-react";
+import {
+  pimentHeroImage,
+  poivronsImage,
+  tomateHeroImage,
+} from "@/assets/images";
 
-type HeroSectionProps = {
-  authSlot: ReactNode;
-};
+const HERO_BADGE = "Le terroir agricole dans toute sa splendeur";
+const HERO_WATERMARK = "ATELIER DU TERROIR";
+const HERO_TITLE = "Atelier du Terroir";
+const HERO_SUBTITLE = "Des produits sains, frais et prets pour le monde.";
+const HERO_PRIMARY_CTA = "Explorer la Boutique";
+const HERO_SECONDARY_CTA = "Notre Histoire";
+const HERO_HIGHLIGHT = "L'authenticite qui se savoure";
+const HERO_HIGHLIGHT_SECOND =
+  "Plus qu'un choix alimentaire, une nouvelle facon de vivre et de consommer.";
 
-const sellingPoints = [
-  "Produits locaux, transformes et exportables",
-  "Une seule page de connexion pour admin et client",
-  "Catalogue, promotions, livraison et wallet relies aux API",
+const ROTATING_TEXTS = [
+  {
+    title: "Cultives avec respect",
+    body:
+      "A l'atelier du terroir, nos produits sont cultives et eleves selon des methodes respectueuses de l'environnement et de l'agriculture durable.",
+  },
+  {
+    title: "Le meilleur du terroir",
+    body:
+      "Qu'il s'agisse de fruits frais, de viande blanche, de produits seches ou transformes, nous privilegions des pratiques responsables pour offrir le meilleur, localement et a l'international.",
+  },
+  {
+    title: "Le terroir agricole dans toute sa splendeur",
+    body: "L'alimentation naturelle est aujourd'hui au coeur de toutes les attentions.",
+  },
 ];
 
-const quickStats = [
-  { label: "Espaces", value: "Admin + Client" },
-  { label: "Auth", value: "Partagee" },
-  { label: "Acces", value: "Par role API" },
-];
+const HERO_IMAGES = [tomateHeroImage, pimentHeroImage, poivronsImage];
 
-const heroImages = [
-  { src: tomateHeroImage, alt: "Tomates du terroir" },
-  { src: pimentHeroImage, alt: "Piments du terroir" },
-  { src: poivronsImage, alt: "Poivrons du terroir" },
-];
+export default function HeroSection() {
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [textIndex, setTextIndex] = useState(0);
 
-export function HeroSection({ authSlot }: HeroSectionProps) {
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentImageIndex((prev) => (prev + 1) % HERO_IMAGES.length);
+    }, 4500);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTextIndex((prev) => (prev + 1) % ROTATING_TEXTS.length);
+    }, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
-    <section className="relative overflow-hidden px-6 pb-10 pt-8 lg:pb-16 lg:pt-10">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(139,94,52,0.22),_transparent_24%),radial-gradient(circle_at_82%_18%,_rgba(31,77,63,0.18),_transparent_22%),linear-gradient(180deg,_rgba(255,251,244,0.9),_rgba(246,241,232,0.98))]" />
-      <div className="absolute left-[-7rem] top-14 h-64 w-64 rounded-full bg-[#d8b184]/30 blur-3xl" />
-      <div className="absolute right-[-6rem] top-24 h-72 w-72 rounded-full bg-[#7ea183]/20 blur-3xl" />
+    <section className="relative min-h-[90vh] overflow-hidden bg-background">
+      <div className="absolute inset-0">
+        {HERO_IMAGES.map((image, index) => (
+          <motion.div
+            key={index}
+            initial={false}
+            animate={{
+              opacity: currentImageIndex === index ? 1 : 0,
+              scale: currentImageIndex === index ? 1 : 1.03,
+            }}
+            transition={{ duration: 1.2, ease: "easeInOut" }}
+            className="absolute inset-0"
+          >
+            <Image
+              src={image}
+              alt={`Atelier du Terroir ${index + 1}`}
+              fill
+              priority={index === 0}
+              sizes="100vw"
+              className="object-cover"
+            />
+          </motion.div>
+        ))}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#1a3a1f]/85 via-[#2a4a25]/45 to-transparent" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(194,230,98,0.12),transparent_50%)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(105deg,transparent_40%,rgba(0,0,0,0.2)_100%)]" />
+      </div>
 
-      <div className="relative mx-auto grid min-h-[calc(100vh-4rem)] max-w-7xl gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
-        <div className="space-y-8">
-          <div className="inline-flex items-center gap-3 rounded-full border border-[#d8c6ac] bg-white/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-[#8b5e34] shadow-sm backdrop-blur">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#1f4d3f]" />
-            L&apos;Atelier du Terroir
-          </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-0 overflow-hidden px-4 sm:px-6 md:px-8 lg:px-12 xl:px-16 2xl:px-20">
+        <p className="select-none text-center font-sans text-[2.4rem] font-black uppercase tracking-[0.12em] text-white/10 sm:text-[4rem] lg:text-center lg:text-[5rem] xl:text-[6rem] [text-shadow:0_2px_20px_rgba(0,0,0,0.3)] [font-stretch:ultra-condensed]">
+          {HERO_WATERMARK}
+        </p>
+      </div>
 
-          <div className="space-y-5">
-            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[#6f7a63]">
-              Le terroir agricole dans toute sa splendeur
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1800px] items-center px-4 pb-10 pt-24 sm:px-6 sm:pt-28 md:px-8 lg:px-12 lg:pt-32 xl:px-16 2xl:px-20">
+        <div className="grid w-full items-start gap-10 lg:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)] lg:gap-12">
+          <motion.div
+            initial={{ opacity: 0, x: -50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.8, ease: [0.25, 0.1, 0.1, 1] }}
+            className="space-y-6 lg:space-y-7"
+          >
+            <div className="inline-flex items-center gap-3 rounded-full border border-white/25 bg-white/10 px-4 py-2 backdrop-blur-md shadow-lg">
+              <Sparkles className="h-4 w-4 text-[#c2e662] drop-shadow-sm" />
+              <span className="text-[11px] font-bold uppercase tracking-[0.25em] text-white/90 sm:text-xs">
+                {HERO_BADGE}
+              </span>
+            </div>
+
+            <div className="relative">
+              <div className="absolute -left-5 top-1/2 hidden h-10 w-0.5 -translate-y-1/2 bg-[#c2e662]/60 lg:block" />
+              <h1 className="font-display text-4xl font-black leading-[1.02] tracking-tight text-white drop-shadow-xl sm:text-5xl lg:text-6xl xl:text-7xl">
+                {HERO_TITLE}
+              </h1>
+            </div>
+
+            <p className="max-w-xl text-xl font-medium leading-snug tracking-wide text-white/95 drop-shadow-md sm:text-2xl lg:text-[2rem]">
+              {HERO_SUBTITLE}
             </p>
-            <h1 className="max-w-4xl text-5xl font-semibold leading-[1.04] tracking-tight text-[#1b221a] md:text-6xl xl:text-7xl">
-              Des produits sains, frais et prets pour le marche local comme international.
-            </h1>
-            <p className="max-w-2xl text-lg leading-8 text-[#52604e]">
-              Retrouve la logique de l&apos;ancien projet sur notre application actuelle:
-              une grande page d&apos;accueil inspiree de la vitrine precedente, avec la meme
-              connexion commune puis une redirection automatique vers `/admin` ou `/client`.
-            </p>
-          </div>
 
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/products"
-              className="rounded-full bg-[#1f4d3f] px-6 py-3 text-sm font-semibold text-white shadow-[0_16px_40px_rgba(31,77,63,0.24)] hover:bg-[#173a30]"
-            >
-              Explorer la boutique
-            </Link>
-            <Link
-              href="/register"
-              className="rounded-full border border-[#d2bea3] bg-white/70 px-6 py-3 text-sm font-semibold text-[#8b5e34] hover:border-[#8b5e34] hover:bg-white"
-            >
-              Creer un compte
-            </Link>
-            <a
-              href="#connexion"
-              className="rounded-full border border-[#d7ddcf] px-6 py-3 text-sm font-semibold text-[#243327] hover:border-[#1f4d3f] hover:text-[#1f4d3f]"
-            >
-              Se connecter
-            </a>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-3">
-            {quickStats.map((item) => (
-              <article
-                key={item.label}
-                className="rounded-[1.6rem] border border-[#e5d8c7] bg-white/82 p-5 shadow-[0_18px_44px_rgba(61,44,21,0.08)] backdrop-blur"
+            <div className="flex flex-col items-center gap-4 pt-4 sm:flex-row lg:justify-start">
+              <Link
+                href="/products"
+                className="group relative overflow-hidden rounded-2xl bg-gradient-to-r from-primary to-primary-hover px-7 py-3.5 text-base font-bold text-white shadow-xl transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl sm:text-lg"
               >
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#8b5e34]">
-                  {item.label}
-                </p>
-                <p className="mt-3 text-xl font-semibold text-[#1c241b]">{item.value}</p>
-              </article>
-            ))}
-          </div>
+                <span className="relative z-10 flex items-center gap-2">
+                  {HERO_PRIMARY_CTA}
+                  <ArrowRight className="h-5 w-5 transition-transform duration-300 group-hover:translate-x-1" />
+                </span>
+                <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-white/20 to-transparent transition-transform duration-500 group-hover:translate-x-0" />
+              </Link>
 
-          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-            <section className="rounded-[2rem] border border-[#e6d7c2] bg-[#fffdfa] p-6 shadow-[0_24px_64px_rgba(66,49,23,0.08)]">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#8b5e34]">
-                Ce que tu retrouves ici
-              </p>
-              <div className="mt-5 space-y-3">
-                {sellingPoints.map((point) => (
-                  <div
-                    key={point}
-                    className="rounded-[1.25rem] border border-[#efe4d6] bg-[#fbf7f1] px-4 py-4 text-sm leading-6 text-[#4e5b4b]"
-                  >
-                    {point}
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="rounded-[2rem] bg-[#1f2e26] p-6 text-white shadow-[0_24px_64px_rgba(14,22,18,0.22)]">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#d7c39e]">
-                Connexion intelligente
-              </p>
-              <h2 className="mt-3 text-2xl font-semibold leading-tight">
-                Une seule authentification, puis le backend decide l&apos;espace d&apos;arrivee.
-              </h2>
-              <p className="mt-4 text-sm leading-7 text-white/78">
-                Un compte admin arrive sur le tableau de bord admin. Un compte client arrive sur
-                l&apos;espace client. La page de connexion reste la meme pour les deux.
-              </p>
-            </section>
-          </div>
-        </div>
-
-        <div id="connexion" className="relative">
-          <div className="absolute inset-x-10 top-8 h-28 rounded-full bg-[#8b5e34]/18 blur-3xl" />
-          <div className="mb-5 grid grid-cols-3 gap-3">
-            {heroImages.map((image, index) => (
-              <div
-                key={index}
-                className={`relative overflow-hidden rounded-[1.8rem] border border-white/40 bg-white/75 shadow-[0_18px_44px_rgba(66,49,23,0.14)] ${
-                  index === 0 ? "col-span-3 aspect-[2.1/1]" : "aspect-[0.95/1.05]"
-                }`}
+              <Link
+                href="/about"
+                className="group flex items-center gap-2 rounded-2xl border border-white/30 bg-white/10 px-6 py-3.5 text-base font-bold text-white backdrop-blur-md transition-all duration-300 hover:border-white/50 hover:bg-white/20 hover:shadow-lg sm:text-lg"
               >
-                <Image
-                  src={image.src}
-                  alt={image.alt}
-                  fill
-                  sizes={index === 0 ? "(max-width: 1024px) 100vw, 520px" : "220px"}
-                  className="object-cover"
-                  priority={index === 0}
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15 transition-all duration-300 group-hover:bg-white/25">
+                  <Play className="h-4 w-4 text-[#c2e662] drop-shadow-sm" />
+                </div>
+                {HERO_SECONDARY_CTA}
+              </Link>
+            </div>
+
+            <div className="flex items-center gap-3 pt-4">
+              {HERO_IMAGES.map((_, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => setCurrentImageIndex(index)}
+                  aria-label={`Afficher l'image ${index + 1}`}
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    currentImageIndex === index
+                      ? "w-8 bg-[#c2e662] shadow-[0_0_12px_rgba(194,230,98,0.5)]"
+                      : "w-1.5 bg-white/40 hover:bg-white/70"
+                  }`}
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent" />
+              ))}
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.8, ease: [0.25, 0.1, 0.1, 1], delay: 0.1 }}
+            className="flex justify-center lg:justify-end lg:pt-4"
+          >
+            <div className="relative w-full max-w-sm overflow-hidden rounded-3xl border border-white/15 bg-gradient-to-br from-white/10 to-white/5 p-6 shadow-2xl backdrop-blur-md lg:max-w-md lg:p-7">
+              <div className="absolute -right-32 -top-32 h-64 w-64 rounded-full bg-[#c2e662]/10 blur-3xl" />
+
+              <div className="relative border-l-3 border-[#c2e662] pl-5">
+                <Leaf className="absolute -left-3 -top-2 h-5 w-5 text-[#c2e662] drop-shadow-md" />
+                <p className="font-display text-2xl font-semibold italic leading-tight text-primary drop-shadow-md sm:text-3xl lg:text-[2.6rem]">
+                  {HERO_HIGHLIGHT}
+                </p>
+                <div className="mt-4 flex items-center gap-2">
+                  <div className="h-px w-8 bg-primary/60" />
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white sm:text-[11px]">
+                    {HERO_HIGHLIGHT_SECOND}
+                  </p>
+                </div>
               </div>
-            ))}
-          </div>
-          {authSlot}
+
+              <div className="my-5 flex items-center gap-2">
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+                <Award className="h-4 w-4 text-white/40" />
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+              </div>
+
+              <div className="relative min-h-[170px] rounded-2xl bg-black/20 p-4 text-center sm:min-h-[180px] sm:p-5">
+                <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[#c2e662]/5 to-transparent" />
+                <div className="relative flex h-full flex-col items-center justify-center gap-2">
+                  <Heart className="h-5 w-5 text-[#c2e662]/80" />
+                  <div className="relative h-28 w-full overflow-hidden sm:h-32">
+                    <AnimatePresence mode="wait">
+                      <motion.div
+                        key={textIndex}
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -15 }}
+                        transition={{ duration: 0.7, ease: "easeInOut" }}
+                        className="absolute inset-x-0 space-y-3 text-center"
+                      >
+                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-primary sm:text-base">
+                          {ROTATING_TEXTS[textIndex].title}
+                        </p>
+                        <p className="text-sm font-medium leading-relaxed text-white drop-shadow-sm sm:text-[15px]">
+                          {ROTATING_TEXTS[textIndex].body}
+                        </p>
+                      </motion.div>
+                    </AnimatePresence>
+                  </div>
+                  <div className="mt-2 flex gap-1">
+                    {ROTATING_TEXTS.map((_, idx) => (
+                      <div
+                        key={idx}
+                        className={`h-1 w-4 rounded-full transition-all duration-500 ${
+                          textIndex === idx ? "bg-[#c2e662]" : "bg-white/30"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
         </div>
       </div>
     </section>

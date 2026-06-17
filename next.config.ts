@@ -1,31 +1,58 @@
 import type { NextConfig } from "next";
 
+const apiUrl =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://localhost:8000";
+
 const remotePatterns = (() => {
-  const apiUrl =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_URL;
+  const patterns: NonNullable<NextConfig["images"]>["remotePatterns"] = [
+    {
+      protocol: "http",
+      hostname: "localhost",
+      port: "8000",
+      pathname: "/**",
+    },
+    {
+      protocol: "http",
+      hostname: "127.0.0.1",
+      port: "8000",
+      pathname: "/**",
+    },
+  ];
 
   if (!apiUrl) {
-    return [];
+    return patterns;
   }
 
   try {
     const parsed = new URL(apiUrl);
-    return [
-      {
-        protocol: parsed.protocol.replace(":", "") as "http" | "https",
-        hostname: parsed.hostname,
-        port: parsed.port,
-        pathname: "/**",
-      },
-    ];
+    patterns.push({
+      protocol: parsed.protocol.replace(":", "") as "http" | "https",
+      hostname: parsed.hostname,
+      port: parsed.port || undefined,
+      pathname: "/**",
+    });
   } catch {
-    return [];
+    // Ignore invalid API URL at build time.
   }
+
+  return patterns;
 })();
 
 const nextConfig: NextConfig = {
   images: {
     remotePatterns,
+  },
+  async rewrites() {
+    const backendBase = apiUrl.replace(/\/$/, "");
+
+    return [
+      {
+        source: "/media/:path*",
+        destination: `${backendBase}/media/:path*`,
+      },
+    ];
   },
 };
 

@@ -1,8 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useState, useTransition } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { Leaf, Lock, Mail, Sparkles } from "lucide-react";
+import { logoImage } from "@/assets/images";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import {
   applyPostLoginRedirect,
@@ -47,6 +50,8 @@ export function AuthForm({
   const [isPending, startTransition] = useTransition();
 
   const requestedRedirect = redirectPath ?? searchParams.get("redirect");
+  const sessionExpiredNotice = searchParams.get("reason") === "session-expired";
+  const registrationSuccess = searchParams.get("registered") === "1";
 
   useEffect(() => {
     setMounted(true);
@@ -62,9 +67,7 @@ export function AuthForm({
       return;
     }
 
-    if (hasAdminAccess(session)) {
-      applyPostLoginRedirect(session, "/admin");
-    }
+    applyPostLoginRedirect(session, hasAdminAccess(session) ? "/admin" : "/dashboard");
   }, [embedded, mounted, requestedRedirect, session]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -81,7 +84,8 @@ export function AuthForm({
 
         applyPostLoginRedirect(
           newSession,
-          requestedRedirect ?? (hasAdminAccess(newSession) ? "/admin" : null)
+          requestedRedirect ??
+            (hasAdminAccess(newSession) ? "/admin" : "/dashboard")
         );
       } catch (submissionError) {
         setError(
@@ -110,7 +114,7 @@ export function AuthForm({
           <p className="text-sm text-[#24573f]">
             {returningToAdmin || hasAdminAccess(session)
               ? "Redirection vers le dashboard admin..."
-              : "Redirection vers la boutique..."}
+              : "Redirection vers ton dashboard..."}
           </p>
         </div>
       </div>
@@ -119,22 +123,41 @@ export function AuthForm({
 
   return (
     <div className="relative w-full max-w-md">
-      <div className="overflow-hidden rounded-[2rem] border border-[#d6dfd2] bg-white shadow-[0_28px_80px_rgba(24,37,24,0.14)]">
-        <div className="bg-gradient-to-r from-[#1f4d3f] to-[#8b5e34] px-8 py-8 text-center text-white">
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/18 text-2xl backdrop-blur-sm">
-            C
+      <Leaf className="pointer-events-none absolute -left-6 top-8 h-10 w-10 rotate-[-24deg] text-[#1f4d3f]/20" />
+      <Leaf className="pointer-events-none absolute -right-4 bottom-16 h-12 w-12 rotate-[18deg] text-[#8b5e34]/25" />
+
+      <div className="overflow-hidden rounded-[2rem] border border-[#d6dfd2] bg-white/95 shadow-[0_28px_80px_rgba(24,37,24,0.14)] backdrop-blur-sm">
+        <div className="relative bg-gradient-to-r from-[#1f4d3f] to-[#8b5e34] px-8 py-8 text-center text-white">
+          <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-white/10 blur-2xl" />
+          <div className="relative mx-auto mb-3 flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-white/25 bg-white/15 backdrop-blur-sm">
+            <Image src={logoImage} alt="Atelier du Terroir" fill className="object-contain p-2" sizes="64px" />
+          </div>
+          <div className="mx-auto mb-2 flex items-center justify-center gap-2 text-sm text-white/90">
+            <Sparkles className="h-4 w-4" />
+            <span>Connexion securisee</span>
           </div>
           <h1 className="text-2xl font-bold">Connexion</h1>
           <p className="mt-1 text-sm text-white/82">
-            Connexion unique. Le role API decide de la destination : admin → dashboard, client →
-            boutique.
+            Connectez-vous avec votre email et mot de passe
           </p>
         </div>
 
         <form className="space-y-5 p-8" onSubmit={handleSubmit}>
+          {registrationSuccess ? (
+            <div className="rounded-xl border border-[#cfe0d4] bg-[#f3faf5] px-4 py-3 text-sm text-[#24573f]">
+              Compte cree avec succes. Connecte-toi avec ton email et ton mot de passe.
+            </div>
+          ) : null}
+
+          {sessionExpiredNotice ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Votre session a expiré. Reconnectez-vous pour continuer votre commande.
+            </div>
+          ) : null}
+
           <div className="rounded-xl border border-[#cfe0d4] bg-[#f3faf5] px-4 py-3 text-sm text-[#24573f]">
-            Connecte-toi avec ton email et mot de passe. Compte admin (platform_admin) →{" "}
-            <strong>/admin</strong>. Compte client → <strong>boutique</strong>.
+            Connecte-toi avec ton <strong>email</strong> et mot de passe. Compte admin (platform_admin) →{" "}
+            <strong>/admin</strong>. Compte client (customer) → <strong>/dashboard</strong>.
           </div>
 
           {error ? (
@@ -144,18 +167,17 @@ export function AuthForm({
           ) : null}
 
           <label className="block space-y-2">
-            <span className="text-sm font-medium text-[#2a3528]">Email ou identifiant</span>
+            <span className="text-sm font-medium text-[#2a3528]">Email</span>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                @
-              </span>
+              <Mail className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7c8978]" />
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
-                name="identifier"
+                type="email"
+                name="email"
                 value={identifier}
                 onChange={(event) => setIdentifier(event.target.value)}
-                autoComplete="username"
-                placeholder="yan ou yan@gmail.com"
+                autoComplete="email"
+                placeholder="yan@gmail.com"
                 required
               />
             </div>
@@ -164,9 +186,7 @@ export function AuthForm({
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Mot de passe</span>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                *
-              </span>
+              <Lock className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7c8978]" />
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
                 type={showPassword ? "text" : "password"}

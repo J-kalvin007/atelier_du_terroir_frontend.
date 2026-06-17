@@ -15,17 +15,12 @@ const CLIENT_LINKS = [
 ];
 
 const NAV_ITEMS: Array<{ id: AdminSectionId; label: string; icon: string; href: string }> = [
-  { id: "analytics", label: "Analytics", icon: "#", href: "/admin?section=analytics" },
-  { id: "audit", label: "Audit", icon: "!", href: "/admin?section=audit" },
-  { id: "banners", label: "Bannieres", icon: "*", href: "/admin?section=banners" },
   { id: "overview", label: "Dashboard", icon: "D", href: "/admin" },
   { id: "products", label: "Produits", icon: "P", href: "/admin?section=products" },
   { id: "categories", label: "Categories", icon: "C", href: "/admin?section=categories" },
   { id: "orders", label: "Commandes", icon: "O", href: "/admin?section=orders" },
   { id: "clients", label: "Clients", icon: "U", href: "/admin?section=clients" },
   { id: "promotions", label: "Promotions", icon: "%", href: "/admin?section=promotions" },
-  { id: "loyalty", label: "Fidelite", icon: "+", href: "/admin?section=loyalty" },
-  { id: "wallet", label: "Wallet", icon: "$", href: "/admin?section=wallet" },
   { id: "settings", label: "Parametres", icon: "S", href: "/admin?section=settings" },
 ];
 

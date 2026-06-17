@@ -1,19 +1,15 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import {
   buildAdminReturnPath,
   getSessionRoleLabel,
-  hasAdminAccess,
   logout,
   refreshSessionFromProfile,
 } from "@/lib/auth";
-import type { AuthSession } from "@/lib/auth";
 import AdminShell from "./components/AdminShell";
-import AdminLoginPage from "./components/AdminLoginPage";
 import OverviewSection from "./components/OverviewSection";
 import ProductsSection from "./components/ProductsSection";
 import CategoriesSection from "./components/CategoriesSection";
@@ -56,42 +52,6 @@ const SECTIONS: AdminSectionId[] = [
   "settings",
 ];
 
-function AdminRoleBanner({
-  session,
-  onSwitchAccount,
-}: {
-  session: AuthSession;
-  onSwitchAccount: () => void;
-}) {
-  const roleLabel = getSessionRoleLabel(session);
-
-  return (
-    <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-950">
-      <p className="font-semibold">Compte connecte sans droits admin detectes</p>
-      <p className="mt-2 leading-6 text-amber-900/90">
-        Role actuel : <strong>{roleLabel}</strong>. Tu peux parcourir le dashboard, mais les
-        creations peuvent etre refusees par l&apos;API sans le role{" "}
-        <strong>platform_admin</strong>.
-      </p>
-      <div className="mt-4 flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={onSwitchAccount}
-          className="inline-flex rounded-xl bg-[#1f4d3f] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#17392f]"
-        >
-          Changer de compte
-        </button>
-        <Link
-          href="/"
-          className="inline-flex rounded-xl border border-[#8b5e34] px-4 py-2 text-xs font-semibold text-[#8b5e34] transition hover:bg-[#f8ecdf]"
-        >
-          Retour boutique
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 export default function AdminDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -126,7 +86,6 @@ export default function AdminDashboard() {
       });
   }, [session]);
 
-  const adminAccess = hasAdminAccess(session);
   const adminReturnPath = buildAdminReturnPath(section);
 
   async function handleSwitchAccount() {
@@ -138,7 +97,7 @@ export default function AdminDashboard() {
   }
 
   if (!session?.token) {
-    return <AdminLoginPage section={section} />;
+    return null;
   }
 
   return (
@@ -153,17 +112,13 @@ export default function AdminDashboard() {
           Verification du role administrateur...
         </div>
       ) : null}
-        {!adminAccess ? (
-          <AdminRoleBanner session={session} onSwitchAccount={() => void handleSwitchAccount()} />
-        ) : (
-          <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
-            <p className="font-semibold">Session administrateur active</p>
-            <p className="mt-2 leading-6 text-emerald-900/90">
-              Role : <strong>{getSessionRoleLabel(session)}</strong>. Tu peux gerer toutes les
-              sections du dashboard et naviguer vers la boutique client via le menu lateral.
-            </p>
-          </div>
-        )}
+      <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
+        <p className="font-semibold">Session administrateur active</p>
+        <p className="mt-2 leading-6 text-emerald-900/90">
+          Role : <strong>{getSessionRoleLabel(session)}</strong>. Tu peux gerer toutes les sections
+          du dashboard et naviguer vers la boutique client via le menu lateral.
+        </p>
+      </div>
       {renderSection(section)}
     </AdminShell>
   );

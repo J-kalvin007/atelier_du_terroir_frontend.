@@ -21,6 +21,9 @@ interface CartState {
   promoDiscount: number;
   loyaltyPointsToUse: number;
   isDrawerOpen: boolean;
+  hasHydrated: boolean;
+  setHasHydrated: (value: boolean) => void;
+  pruneInvalidItems: (isValidProductId: (productId: string) => boolean) => number;
   addItem: (item: CartItem) => void;
   removeItem: (productId: string, variantId: string | null) => void;
   updateQuantity: (productId: string, variantId: string | null, qty: number) => void;
@@ -41,6 +44,25 @@ export const useCartStore = create<CartState>()(
       promoDiscount: 0,
       loyaltyPointsToUse: 0,
       isDrawerOpen: false,
+      hasHydrated: false,
+
+      setHasHydrated: (value) => {
+        set({ hasHydrated: value });
+      },
+
+      pruneInvalidItems: (isValidProductId) => {
+        const removedCount = get().items.filter((item) => !isValidProductId(item.productId)).length;
+
+        if (removedCount === 0) {
+          return 0;
+        }
+
+        set((state) => ({
+          items: state.items.filter((item) => isValidProductId(item.productId)),
+        }));
+
+        return removedCount;
+      },
 
       addItem: (item) => {
         set((state) => {
@@ -128,6 +150,9 @@ export const useCartStore = create<CartState>()(
         promoCode: state.promoCode,
         promoDiscount: state.promoDiscount,
       }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
     }
   )
 );

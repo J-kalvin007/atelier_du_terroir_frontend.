@@ -91,6 +91,7 @@ export function sanitizeApiSlug(value: string, fallbackName = ""): string {
     .replace(/[^a-zA-Z0-9_-]+/g, "_")
     .replace(/_{2,}/g, "_")
     .replace(/^[-_]+|[-_]+$/g, "")
+    .toLowerCase()
     .slice(0, 50);
 
   if (slug) {
@@ -98,6 +99,96 @@ export function sanitizeApiSlug(value: string, fallbackName = ""): string {
   }
 
   return "item";
+}
+
+/** Extrait un message lisible depuis une page d'erreur HTML Django (DEBUG=True). */
+export function parseDjangoHtmlError(html: string): string | null {
+  if (!html.includes("Exception Type:") && !html.includes("<!DOCTYPE html>")) {
+    return null;
+  }
+
+  const exceptionType = html.match(/Exception Type:\s*([^\n<]+)/)?.[1]?.trim();
+  const exceptionValue = html.match(/Exception Value:\s*([^\n<]+)/)?.[1]?.trim();
+
+  if (exceptionValue?.includes("too many clients already")) {
+    return "Le serveur PostgreSQL est saturé (trop de connexions). Redémarrez le backend Docker, puis réessayez dans quelques secondes.";
+  }
+
+  if (exceptionType === "ValidationError" && exceptionValue) {
+    const quotedMessages = [...exceptionValue.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+    if (quotedMessages.length > 0) {
+      return quotedMessages.join(" ");
+    }
+  }
+
+  if (exceptionType && exceptionValue) {
+    return exceptionValue.replace(/^\[|\]$/g, "").replace(/'/g, "").trim() || `${exceptionType}: ${exceptionValue}`;
+  }
+
+  const title = html.match(/<title>\s*([^<]+?)\s*<\/title>/i)?.[1]?.trim();
+  if (title && title.includes(" at /")) {
+    const [headline] = title.split(/\s+at\s+/);
+    if (headline?.trim()) {
+      return headline.trim();
+    }
+  }
+
+  return "Erreur serveur Django (500). Vérifiez que le backend est disponible.";
+}
+
+function readPublicApiBaseUrl() {
+  return (
+    process.env.NEXT_PUBLIC_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    ""
+  ).replace(/\/$/, "");
+}
+
+/** Normalise une URL d'image Django (/media/...) pour affichage via le proxy Next.js. */
+export function resolveMediaUrl(value: string | null | undefined): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  const url = value.trim();
+
+  if (url.startsWith("blob:") || url.startsWith("data:")) {
+    return url;
+  }
+
+  const apiBase = readPublicApiBaseUrl();
+
+  if (/^https?:\/\//i.test(url)) {
+    if (apiBase && url.startsWith(apiBase)) {
+      const path = url.slice(apiBase.length);
+      if (path.startsWith("/media/")) {
+        return path;
+      }
+    }
+
+    return url;
+  }
+
+  if (url.startsWith("/media/")) {
+    return url;
+  }
+
+  if (url.startsWith("media/")) {
+    return `/${url}`;
+  }
+
+  if (apiBase) {
+    return resolveMediaUrl(`${apiBase}${url.startsWith("/") ? url : `/${url}`}`);
+  }
+
+  return url.startsWith("/") ? url : `/${url}`;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: string | null | undefined) {
+  return Boolean(value && UUID_PATTERN.test(value.trim()));
 }
 
 /** Prix decimal Swagger : ^-?\d{0,10}(?:\.\d{0,2})?$ */
@@ -182,5 +273,18 @@ export function isPermissionDeniedError(error: unknown) {
     message.includes("acces refuse") ||
     message.includes("permission") ||
     message.includes("you do not have permission")
+  );
+}
+
+export function isInvalidAuthTokenError(error: unknown) {
+  const message = readApiError(error, "").toLowerCase();
+
+  return (
+    message.includes("invalid token") ||
+    message.includes("token non valide") ||
+    message.includes("session a expire") ||
+    message.includes("session expir") ||
+    message.includes("authentication credentials were not provided") ||
+    message.includes("informations d'authentification")
   );
 }

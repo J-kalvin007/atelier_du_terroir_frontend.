@@ -14,7 +14,7 @@ import {
   type PublicPromoCode,
 } from "@/lib/ecommerce-api";
 import { CategoriesGrid } from "@/components/home/CategoriesGrid";
-import { FeaturesSection } from "@/components/home/FeaturesSection";
+import FeaturesSection from "@/components/home/FeaturesSection";
 import { TrendingProducts } from "@/components/home/TrendingProducts";
 
 type PreviewState = {

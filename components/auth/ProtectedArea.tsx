@@ -4,17 +4,28 @@ import Link from "next/link";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AuthSession,
   clearSession,
+  hasAdminAccess,
   refreshSessionFromProfile,
   UserRole,
 } from "@/lib/auth";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import { AdminAuthPanel } from "@/components/auth/AdminAuthPanel";
+import { AuthPageShell } from "@/components/auth/AuthPageShell";
 
 type ProtectedAreaProps = {
   allowedRole: UserRole;
   children: ReactNode;
 };
+
+function isSessionAllowed(session: AuthSession, allowedRole: UserRole) {
+  if (allowedRole === "admin") {
+    return hasAdminAccess(session);
+  }
+
+  return session.role === allowedRole;
+}
 
 export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
   const router = useRouter();
@@ -38,19 +49,19 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
       return;
     }
 
-    if (session.role === allowedRole) {
+    if (isSessionAllowed(session, allowedRole)) {
       adminRefreshAttemptedRef.current = false;
       setAdminRefreshResolved(false);
       return;
     }
 
-    if (allowedRole === "admin" && session.role === "client") {
+    if (allowedRole === "admin" && !hasAdminAccess(session)) {
       if (!adminRefreshAttemptedRef.current) {
         adminRefreshAttemptedRef.current = true;
 
         void refreshSessionFromProfile(session)
           .then((refreshedSession) => {
-            if (refreshedSession.role === "admin") {
+            if (hasAdminAccess(refreshedSession)) {
               adminRefreshAttemptedRef.current = false;
               setAdminRefreshResolved(false);
               return;
@@ -83,26 +94,23 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
 
   if (!session && allowedRole === "admin") {
     return (
-      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f4efe6] px-6 py-10">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(139,94,52,0.18),_transparent_32%)]" />
-        <div className="relative w-full max-w-lg space-y-6">
-          <div className="text-center">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#8b5e34]">
-              Administration
-            </p>
-            <h1 className="mt-3 text-2xl font-bold text-slate-900">Dashboard admin</h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Connexion reservee aux comptes avec le role <strong>platform_admin</strong>.
-            </p>
-          </div>
-          <AdminAuthPanel />
-          <div className="text-center">
-            <Link href="/" className="text-sm font-medium text-[#8b5e34] hover:underline">
+      <AuthPageShell
+        badge="Administration"
+        title="Connexion dashboard admin"
+        description="Connecte-toi avec un compte platform_admin pour acceder au dashboard et gerer la boutique."
+        sidePanel={
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-[#eadfce] bg-white/90 p-4 text-sm text-slate-600 backdrop-blur">
+              Compte avec role <strong>platform_admin</strong> requis pour les actions API (commandes,
+              CRUD catalogue).
+            </div>
+            <Link href="/" className="inline-flex text-sm font-medium text-[#8b5e34] hover:underline">
               Retour boutique
             </Link>
           </div>
-        </div>
-      </div>
+        }
+        formPanel={<AdminAuthPanel />}
+      />
     );
   }
 
@@ -114,7 +122,7 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
     );
   }
 
-  if (session?.role === allowedRole) {
+  if (session && isSessionAllowed(session, allowedRole)) {
     return <>{children}</>;
   }
 
@@ -122,17 +130,15 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
     return null;
   }
 
-  if (allowedRole === "admin" && session.role !== "admin" && !adminRefreshResolved) {
+  if (allowedRole === "admin" && !hasAdminAccess(session) && !adminRefreshResolved) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f6f1e7] px-6">
-        <p className="text-sm text-[#4f5e4a]">
-          Verification du role administrateur...
-        </p>
+        <p className="text-sm text-[#4f5e4a]">Verification du role administrateur...</p>
       </div>
     );
   }
 
-  if (allowedRole === "admin" && session.role !== "admin") {
+  if (allowedRole === "admin" && !hasAdminAccess(session)) {
     const roleLabel =
       typeof session.user.raw.role === "string" && session.user.raw.role.trim().length > 0
         ? session.user.raw.role
@@ -172,7 +178,7 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
     );
   }
 
-  if (session.role !== allowedRole) {
+  if (session && !isSessionAllowed(session, allowedRole)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f6f1e7] px-6">
         <p className="text-sm text-[#4f5e4a]">Redirection...</p>

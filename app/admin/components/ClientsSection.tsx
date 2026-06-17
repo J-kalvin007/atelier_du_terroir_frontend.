@@ -14,7 +14,9 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { AdminAccessNotice } from "@/components/admin/AdminAccessNotice";
 import { useAuthSession } from "@/components/auth/useAuthSession";
+import { hasAdminAccess } from "@/lib/auth";
 import {
   adjustAdminLoyaltyPoints,
   getAdminAllWallets,
@@ -58,19 +60,50 @@ export default function ClientsSection() {
     if (!session?.token) return;
     setLoading(true);
     setError(null);
-    try {
-      const [walletsData, profilesData] = await Promise.all([
-        getAdminAllWallets(session.token),
-        getAdminLoyaltyProfiles(session.token),
-      ]);
-      setWallets(walletsData);
-      setProfiles(profilesData);
-    } catch (err) {
-      console.error("Error loading CRM clients data:", err);
-      setError(readApiError(err, "Impossible de charger l'annuaire des clients."));
-    } finally {
-      setLoading(false);
+
+    const [walletsResult, profilesResult] = await Promise.allSettled([
+      getAdminAllWallets(session.token),
+      getAdminLoyaltyProfiles(session.token),
+    ]);
+
+    if (walletsResult.status === "fulfilled") {
+      setWallets(walletsResult.value);
+    } else {
+      console.error("Error loading wallets:", walletsResult.reason);
+      setWallets([]);
     }
+
+    if (profilesResult.status === "fulfilled") {
+      setProfiles(profilesResult.value);
+    } else {
+      console.error("Error loading loyalty profiles:", profilesResult.reason);
+      setProfiles([]);
+    }
+
+    if (walletsResult.status === "rejected" && profilesResult.status === "rejected") {
+      setError(
+        readApiError(
+          walletsResult.reason,
+          "Impossible de charger l'annuaire des clients (wallets et fidelite)."
+        )
+      );
+    } else if (profilesResult.status === "rejected" && walletsResult.status === "fulfilled") {
+      setError(
+        readApiError(
+          profilesResult.reason,
+          "Wallets charges, mais les profils fidelite sont indisponibles."
+        )
+      );
+    } else if (walletsResult.status === "rejected" && profilesResult.status === "fulfilled") {
+      setError(
+        readApiError(
+          walletsResult.reason,
+          "Profils fidelite charges, mais les wallets sont indisponibles."
+        )
+      );
+    }
+
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -225,6 +258,13 @@ export default function ClientsSection() {
           {error}
         </div>
       )}
+
+      {!hasAdminAccess(session) ? (
+        <AdminAccessNotice
+          title="Acces admin requis pour l'annuaire CRM"
+          description="Les wallets et profils fidelite ne sont accessibles qu'avec un compte platform_admin."
+        />
+      ) : null}
 
       {/* CRM Highlight Stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

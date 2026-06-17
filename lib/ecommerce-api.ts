@@ -1,4 +1,4 @@
-import { parseApiErrorPayload, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
+import { parseApiErrorPayload, parseDjangoHtmlError, resolveMediaUrl, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
 
 export type PublicCategory = {
   id: string;
@@ -123,33 +123,45 @@ export type AdminProductImage = {
 
 export type AdminProductImagePayload = {
   product: string;
-  image: File;
+  image: File | string;
   alt_text: string;
   is_primary: boolean;
   is_active?: boolean;
 };
 
+export type AdminProductImagePatchPayload = Partial<{
+  product: string;
+  image: File | string;
+  alt_text: string;
+  is_primary: boolean;
+  is_active: boolean;
+}>;
+
 export type AdminProductVariant = {
   id: string;
   product?: string;
   name: string;
-  sku: string;
+  sku: string | null;
   price: string;
   stock: number;
-  weight_grams: number;
+  weight_grams: number | null;
   is_active?: boolean;
   is_in_stock?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type AdminProductVariantPayload = {
   product: string;
   name: string;
-  sku: string;
+  sku?: string | null;
   price: string;
   stock: number;
-  weight_grams: number;
+  weight_grams?: number | null;
   is_active?: boolean;
 };
+
+export type AdminProductVariantPatchPayload = Partial<AdminProductVariantPayload>;
 
 export type AdminCatalogProduct = {
   id: string;
@@ -172,7 +184,7 @@ export type AdminCatalogProduct = {
   thumbnail?: string | null;
   images?: AdminProductImage[];
   variants?: AdminProductVariant[];
-  related_products?: Array<{
+  /*related_products?: Array<{
     id: string;
     name: string;
     slug: string;
@@ -183,7 +195,7 @@ export type AdminCatalogProduct = {
     product_type: string;
     category_name: string;
     primary_image: string | null;
-  }>;
+  }>;*/
   note_produit?: string;
   count_ratings?: number;
   count_favorites?: number;
@@ -202,7 +214,7 @@ export type AdminCatalogProductPayload = {
   seo_title?: string | null;
   seo_description?: string | null;
   is_top?: boolean | null;
-  related_products?: string[];
+  /*related_products?: string[];*/
   images?: Array<{
     image: string;
     alt_text?: string;
@@ -266,38 +278,58 @@ type PublicProductRecord = {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   process.env.NEXT_PUBLIC_API_URL ??
-  "";
+  "http://localhost:8000";
 
 function buildUrl(path: string) {
   if (/^https?:\/\//i.test(path)) {
     return path;
   }
 
-  // Appels /api/v1 via le proxy Next.js (evite CORS / ngrok cote navigateur).
-  if (path.startsWith("/api/v1/")) {
-    return path;
-  }
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
-  if (!API_BASE_URL) {
-    return path;
-  }
-
-  return `${API_BASE_URL.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${API_BASE_URL.replace(/\/$/, "")}${normalizedPath}`;
 }
 
 function readFetchErrorMessage(text: string, status: number, path: string) {
-  if (status === 403) {
-    return "Acces refuse : ce compte n'a pas le role platform_admin requis pour les commandes admin. Attribue ce role dans Django (admin ou API users).";
-  }
-
   if (!text.trim()) {
+    if (status === 403) {
+      if (path.includes("/commandes/validate-commandes")) {
+        return "Commande refusée : connectez-vous avec un compte client (customer), pas un compte administrateur.";
+      }
+      return "Accès refusé.";
+    }
     return `Erreur API ${status} sur ${path}`;
   }
 
   try {
-    return parseApiErrorPayload(JSON.parse(text), text.trim());
+    const parsed = parseApiErrorPayload(JSON.parse(text), text.trim());
+    if (parsed && /invalid token|token non valide/i.test(parsed)) {
+      return "Votre session a expiré. Reconnectez-vous pour confirmer la commande.";
+    }
+    if (parsed && status === 403 && path.includes("/commandes/validate-commandes")) {
+      if (/permission|admin|platform_admin/i.test(parsed)) {
+        return "Commande refusée : connectez-vous avec un compte client (customer), pas un compte administrateur.";
+      }
+    }
+    return parsed;
   } catch {
-    return text.trim();
+    const djangoMessage = parseDjangoHtmlError(text);
+    if (djangoMessage) {
+      return djangoMessage;
+    }
+
+    if (status === 403) {
+      if (path.includes("/commandes/validate-commandes")) {
+        return "Commande refusée : connectez-vous avec un compte client (customer), pas un compte administrateur.";
+      }
+      if (path.includes("/admin/")) {
+        return "Accès refusé : ce compte n'a pas le rôle platform_admin requis pour les actions admin.";
+      }
+      return "Accès refusé.";
+    }
+
+    const trimmed = text.trim();
+    return trimmed.length > 280 ? `${trimmed.slice(0, 280)}…` : trimmed;
   }
 }
 
@@ -334,7 +366,7 @@ function sanitizeAdminProductPayload(payload: AdminCatalogProductPayload): Admin
     seo_title: payload.seo_title?.trim().slice(0, 255) || null,
     seo_description: payload.seo_description?.trim() || null,
     is_top: payload.is_top ?? false,
-    related_products: payload.related_products ?? [],
+    /*related_products: payload.related_products ?? [],*/
   };
 }
 
@@ -358,23 +390,7 @@ function buildQueryString(params?: Record<string, string | number | boolean | un
 }
 
 function toAbsoluteUrl(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  if (/^https?:\/\//i.test(value)) {
-    if (value.startsWith("http://") && API_BASE_URL?.startsWith("https://")) {
-      return value.replace(/^http:\/\//i, "https://");
-    }
-
-    return value;
-  }
-
-  if (!API_BASE_URL) {
-    return value;
-  }
-
-  return `${API_BASE_URL.replace(/\/$/, "")}${value.startsWith("/") ? value : `/${value}`}`;
+  return resolveMediaUrl(value);
 }
 
 function extractCollection<T>(payload: unknown): T[] {
@@ -434,33 +450,68 @@ async function getFirstWorkingPayload<T>(paths: string[], init?: RequestInit) {
   throw lastError;
 }
 
-async function fetchMutation<T>(path: string, init: RequestInit) {
-  const response = await fetch(buildUrl(path), {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      "ngrok-skip-browser-warning": "true",
-      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-      ...(init.headers ?? {}),
-    },
-    cache: "no-store",
-  });
+function isTransientBackendError(message: string) {
+  const normalized = message.toLowerCase();
 
-  if (!response.ok) {
+  return (
+    normalized.includes("too many clients") ||
+    normalized.includes("operationalerror") ||
+    normalized.includes("postgresql est satur") ||
+    normalized.includes("connection failed") ||
+    normalized.includes("fetch failed")
+  );
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchMutation<T>(
+  path: string,
+  init: RequestInit,
+  options?: { retries?: number }
+) {
+  const maxAttempts = (options?.retries ?? 0) + 1;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await fetch(buildUrl(path), {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        "ngrok-skip-browser-warning": "true",
+        ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(init.headers ?? {}),
+      },
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      const message = readFetchErrorMessage(text, response.status, path);
+      lastError = new Error(message);
+
+      if (attempt < maxAttempts - 1 && isTransientBackendError(message)) {
+        await sleep(900 * (attempt + 1));
+        continue;
+      }
+
+      throw lastError;
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
     const text = await response.text();
-    throw new Error(readFetchErrorMessage(text, response.status, path));
+    if (!text) {
+      return undefined as T;
+    }
+
+    return JSON.parse(text) as T;
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const text = await response.text();
-  if (!text) {
-    return undefined as T;
-  }
-
-  return JSON.parse(text) as T;
+  throw lastError ?? new Error(`Erreur API sur ${path}`);
 }
 
 async function fetchMutationFirst<T>(paths: string[], init: RequestInit) {
@@ -490,7 +541,88 @@ function normalizeAdminProductImage(image: AdminProductImage) {
   };
 }
 
-function normalizeAdminProduct(product: AdminCatalogProduct) {
+function buildProductImageFormData(
+  payload: AdminProductImagePatchPayload & { product?: string }
+) {
+  const productValue = String(payload.product ?? "").trim();
+  if (!productValue) {
+    throw new Error("Impossible d'envoyer l'image sans identifiant produit.");
+  }
+
+  const formData = new FormData();
+  formData.append("product", productValue);
+
+  if (payload.image instanceof File) {
+    formData.append("image", payload.image, payload.image.name);
+  } else if (typeof payload.image === "string" && payload.image.trim()) {
+    formData.append("image", payload.image.trim());
+  }
+
+  if (payload.alt_text !== undefined) {
+    formData.append("alt_text", payload.alt_text);
+  }
+  if (payload.is_primary !== undefined) {
+    formData.append("is_primary", String(payload.is_primary));
+  }
+  if (payload.is_active !== undefined) {
+    formData.append("is_active", String(payload.is_active));
+  }
+
+  return formData;
+}
+
+function buildProductImageJsonBody(payload: AdminProductImagePatchPayload & { product: string }) {
+  const body: Record<string, unknown> = { product: payload.product };
+
+  if (typeof payload.image === "string" && payload.image.trim()) {
+    body.image = payload.image.trim();
+  }
+  if (payload.alt_text !== undefined) {
+    body.alt_text = payload.alt_text;
+  }
+  if (payload.is_primary !== undefined) {
+    body.is_primary = payload.is_primary;
+  }
+  if (payload.is_active !== undefined) {
+    body.is_active = payload.is_active;
+  }
+
+  return JSON.stringify(body);
+}
+
+function sanitizeAdminProductVariantPayload(
+  payload: AdminProductVariantPayload | AdminProductVariantPatchPayload
+) {
+  const sanitized: Record<string, unknown> = {};
+
+  if (payload.product !== undefined) {
+    sanitized.product = payload.product;
+  }
+  if (payload.name !== undefined) {
+    sanitized.name = String(payload.name).trim().slice(0, 100);
+  }
+  if (payload.sku !== undefined) {
+    const sku = payload.sku == null ? null : String(payload.sku).trim().slice(0, 100);
+    sanitized.sku = sku || null;
+  }
+  if (payload.price !== undefined) {
+    sanitized.price = sanitizeDecimalPrice(String(payload.price));
+  }
+  if (payload.stock !== undefined) {
+    sanitized.stock = Math.max(0, Math.floor(Number(payload.stock) || 0));
+  }
+  if (payload.weight_grams !== undefined) {
+    sanitized.weight_grams =
+      payload.weight_grams == null ? null : Math.max(0, Math.floor(Number(payload.weight_grams)));
+  }
+  if (payload.is_active !== undefined) {
+    sanitized.is_active = payload.is_active;
+  }
+
+  return sanitized;
+}
+
+function normalizeAdminProduct(product: AdminCatalogProduct, fallbackId?: string) {
   const primaryImageUrl =
     readImageUrl(product.primary_image) ??
     readImageUrl(product.image) ??
@@ -499,6 +631,7 @@ function normalizeAdminProduct(product: AdminCatalogProduct) {
 
   return {
     ...product,
+    id: product.id || fallbackId || "",
     image: primaryImageUrl ?? toAbsoluteUrl(product.image),
     primary_image: primaryImageUrl ?? toAbsoluteUrl(product.primary_image as string | null | undefined),
     image_url: primaryImageUrl ?? toAbsoluteUrl(product.image_url),
@@ -537,7 +670,7 @@ function buildAdminCategoryBody(payload: AdminCategoryPayload) {
 
 function readImageUrl(value: unknown) {
   if (typeof value === "string" && value.trim()) {
-    return value;
+    return resolveMediaUrl(value.trim());
   }
 
   if (value && typeof value === "object") {
@@ -546,11 +679,11 @@ function readImageUrl(value: unknown) {
     const nestedUrl = record.url;
 
     if (typeof nestedImage === "string" && nestedImage.trim()) {
-      return nestedImage;
+      return resolveMediaUrl(nestedImage.trim());
     }
 
     if (typeof nestedUrl === "string" && nestedUrl.trim()) {
-      return nestedUrl;
+      return resolveMediaUrl(nestedUrl.trim());
     }
   }
 
@@ -697,15 +830,61 @@ function flattenCategories(categories: PublicCategory[]): PublicCategory[] {
   ]);
 }
 
+function buildCategoryTree(categories: PublicCategory[]): PublicCategory[] {
+  const nodes = categories.map((category) => ({
+    ...category,
+    image: toAbsoluteUrl(category.image),
+    children: Array.isArray(category.children) ? category.children : [],
+  }));
+
+  const hasNestedChildren = nodes.some(
+    (category) => Array.isArray(category.children) && category.children.length > 0
+  );
+
+  if (hasNestedChildren) {
+    return nodes.map((category) => ({
+      ...category,
+      children: category.children?.length ? category.children : undefined,
+    }));
+  }
+
+  const byId = new Map<string, PublicCategory>();
+  for (const category of nodes) {
+    byId.set(category.id, { ...category, children: [] });
+  }
+
+  const roots: PublicCategory[] = [];
+  for (const category of byId.values()) {
+    if (category.parent && byId.has(category.parent)) {
+      byId.get(category.parent)!.children!.push(category);
+    } else {
+      roots.push(category);
+    }
+  }
+
+  const prune = (items: PublicCategory[]): PublicCategory[] =>
+    items.map((item) => ({
+      ...item,
+      children: item.children?.length ? prune(item.children) : undefined,
+    }));
+
+  return prune(roots);
+}
+
 export async function getPublicCategories() {
   const payload = await fetchJson<PublicCategory[] | Paginated<PublicCategory>>(
     "/api/v1/catalog/categories/"
   );
 
-  return extractCollection<PublicCategory>(payload).map((category) => ({
+  return buildCategoryTree(extractCollection<PublicCategory>(payload));
+}
+
+export async function getCategoryById(id: string) {
+  const category = await fetchJson<PublicCategory>(`/api/v1/catalog/categories/${id}/`);
+  return {
     ...category,
     image: toAbsoluteUrl(category.image),
-  }));
+  };
 }
 
 export async function getPublicProducts(limit = 8) {
@@ -720,11 +899,9 @@ export async function getPublicProducts(limit = 8) {
 
 export async function getProducts(filters?: ProductFilters) {
   const query = buildQueryString(filters);
-  const payload = await getFirstWorkingPayload<PublicProductRecord[] | Paginated<PublicProductRecord>>([
-    `/api/v1/catalog/products/${query}`,
-    `/api/catalog/products/${query}`,
-    `/products/${query}`,
-  ]);
+  const payload = await fetchJson<PublicProductRecord[] | Paginated<PublicProductRecord>>(
+    `/api/v1/catalog/products/${query}`
+  );
 
   const results = extractCollection<PublicProductRecord>(payload).map(normalizePublicProduct);
 
@@ -754,18 +931,17 @@ export async function getCategories() {
 }
 
 export async function getActivePromoCodes() {
-  const payload = await getFirstWorkingPayload<PublicPromoCode[]>([
-    "/api/v1/promotions/codes-promo-actifs/",
-    "/api/v1/promotions/codes/",
-  ]);
+  const payload = await fetchJson<PublicPromoCode[] | Paginated<PublicPromoCode>>(
+    "/api/v1/promotions/codes-promo-actifs/"
+  );
   return extractCollection<PublicPromoCode>(payload);
 }
 
-export async function getActiveBanners() {
-  const payload = await getFirstWorkingPayload<PublicBanner[]>([
-    "/api/v1/promotions/recommendations-actives/",
-    "/api/v1/promotions/banners/",
-  ]);
+export async function getActiveBanners(type?: string) {
+  const query = type ? `?type=${encodeURIComponent(type)}` : "";
+  const payload = await fetchJson<PublicBanner[] | Paginated<PublicBanner>>(
+    `/api/v1/promotions/recommendations-actives/${query}`
+  );
   return extractCollection<PublicBanner>(payload).map((banner) => ({
     ...banner,
     image_url: toAbsoluteUrl(banner.image_url) ?? "",
@@ -773,10 +949,9 @@ export async function getActiveBanners() {
 }
 
 export async function getActiveFlashSales() {
-  const payload = await getFirstWorkingPayload<PublicFlashSale[]>([
-    "/api/v1/promotions/soldes-actifs/",
-    "/api/v1/promotions/flash-sales/",
-  ]);
+  const payload = await fetchJson<PublicFlashSale[] | Paginated<PublicFlashSale>>(
+    "/api/v1/promotions/soldes-actifs/"
+  );
   return extractCollection<PublicFlashSale>(payload).map((sale) => ({
     ...sale,
     product_image: toAbsoluteUrl(sale.product_image) ?? "",
@@ -784,8 +959,8 @@ export async function getActiveFlashSales() {
 }
 
 export async function getAdminPromoCodes(token: string) {
-  const payload = await getFirstWorkingPayload<AdminPromoCode[]>(
-    ["/api/v1/promotions/admin/codes-promo/", "/api/v1/promotions/admin/codes/"],
+  const payload = await fetchJson<AdminPromoCode[] | Paginated<AdminPromoCode>>(
+    "/api/v1/promotions/admin/codes-promo/",
     { headers: authHeaders(token) }
   );
 
@@ -806,19 +981,16 @@ export type AdminPromoCodePayload = {
 };
 
 export async function createAdminPromoCode(token: string, payload: AdminPromoCodePayload) {
-  return fetchMutationFirst<AdminPromoCode>(
-    ["/api/v1/promotions/admin/codes-promo/", "/api/v1/promotions/admin/codes/"],
-    {
-      method: "POST",
-      body: JSON.stringify({
-        applicable_products: [],
-        applicable_categories: [],
-        restricted_to_tiers: [],
-        ...payload,
-      }),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<AdminPromoCode>("/api/v1/promotions/admin/codes-promo/", {
+    method: "POST",
+    body: JSON.stringify({
+      applicable_products: [],
+      applicable_categories: [],
+      restricted_to_tiers: [],
+      ...payload,
+    }),
+    headers: authHeaders(token),
+  });
 }
 
 export type AdminFlashSale = {
@@ -826,20 +998,238 @@ export type AdminFlashSale = {
   is_active: boolean;
   sale_price: string;
   original_price: string;
-  quota_stock_limit: number;
+  quota_stock_limit: number | null;
   product_sold_count: number;
   starts_at: string;
   ends_at: string;
   product: string;
   variant?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AdminFlashSalePayload = {
+  is_active?: boolean;
+  sale_price: string;
+  quota_stock_limit?: number | null;
+  starts_at?: string;
+  ends_at: string;
+  product: string;
+  variant?: string | null;
+};
+
+export type AdminBanner = {
+  id: string;
+  is_active: boolean;
+  title: string;
+  subtitle?: string;
+  image: string;
+  cta_label?: string;
+  cta_url?: string;
+  banner_type?: "carousel" | "popup" | "hero" | "side_banner";
+  position?: number;
+  starts_at?: string;
+  ends_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AdminBannerPayload = {
+  is_active?: boolean;
+  title: string;
+  subtitle?: string;
+  image: string;
+  cta_label?: string;
+  cta_url?: string;
+  banner_type?: "carousel" | "popup" | "hero" | "side_banner";
+  position?: number;
+  starts_at?: string;
+  ends_at?: string | null;
 };
 
 export async function getAdminFlashSales(token: string) {
-  const payload = await getFirstWorkingPayload<AdminFlashSale[]>(
-    ["/api/v1/promotions/admin/ventes-solde/", "/api/v1/promotions/admin/flash-sales/"],
+  const payload = await fetchJson<AdminFlashSale[] | Paginated<AdminFlashSale>>(
+    "/api/v1/promotions/admin/ventes-solde/",
     { headers: authHeaders(token) }
   );
   return extractCollection<AdminFlashSale>(payload);
+}
+
+export async function getAdminFlashSaleById(token: string, id: string) {
+  return fetchJson<AdminFlashSale>(`/api/v1/promotions/admin/ventes-solde/${id}/`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function createAdminFlashSale(token: string, payload: AdminFlashSalePayload) {
+  return fetchMutation<AdminFlashSale>("/api/v1/promotions/admin/ventes-solde/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateAdminFlashSale(
+  token: string,
+  id: string,
+  payload: AdminFlashSalePayload
+) {
+  return fetchMutation<AdminFlashSale>(`/api/v1/promotions/admin/ventes-solde/${id}/`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function patchAdminFlashSale(
+  token: string,
+  id: string,
+  payload: Partial<AdminFlashSalePayload> & { is_active?: boolean }
+) {
+  return fetchMutation<AdminFlashSale>(`/api/v1/promotions/admin/ventes-solde/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteAdminFlashSale(token: string, id: string) {
+  await fetchMutation<void>(`/api/v1/promotions/admin/ventes-solde/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
+export async function getAdminPromoCodeById(token: string, id: string) {
+  return fetchJson<AdminPromoCode>(`/api/v1/promotions/admin/codes-promo/${id}/`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateAdminPromoCode(
+  token: string,
+  id: string,
+  payload: AdminPromoCodePayload
+) {
+  return fetchMutation<AdminPromoCode>(`/api/v1/promotions/admin/codes-promo/${id}/`, {
+    method: "PUT",
+    body: JSON.stringify({
+      applicable_products: [],
+      applicable_categories: [],
+      restricted_to_tiers: [],
+      ...payload,
+    }),
+    headers: authHeaders(token),
+  });
+}
+
+export async function patchAdminPromoCode(
+  token: string,
+  id: string,
+  payload: Partial<AdminPromoCodePayload>
+) {
+  return fetchMutation<AdminPromoCode>(`/api/v1/promotions/admin/codes-promo/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteAdminPromoCode(token: string, id: string) {
+  await fetchMutation<void>(`/api/v1/promotions/admin/codes-promo/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
+export async function deactivateExpiredPromoCodes(token: string) {
+  return fetchMutation<{ deactivated: number }>(
+    "/api/v1/promotions/admin/codes-promo/deactivate_expired/",
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+      headers: authHeaders(token),
+    }
+  );
+}
+
+export async function getAdminBanners(token: string) {
+  const payload = await fetchJson<AdminBanner[] | Paginated<AdminBanner>>(
+    "/api/v1/promotions/admin/recommendations/",
+    { headers: authHeaders(token) }
+  );
+
+  return extractCollection<AdminBanner>(payload).map((banner) => ({
+    ...banner,
+    image: toAbsoluteUrl(banner.image) ?? banner.image,
+  }));
+}
+
+export async function getAdminBannerById(token: string, id: string) {
+  const banner = await fetchJson<AdminBanner>(`/api/v1/promotions/admin/recommendations/${id}/`, {
+    headers: authHeaders(token),
+  });
+
+  return {
+    ...banner,
+    image: toAbsoluteUrl(banner.image) ?? banner.image,
+  };
+}
+
+export async function createAdminBanner(token: string, payload: AdminBannerPayload) {
+  const banner = await fetchMutation<AdminBanner>("/api/v1/promotions/admin/recommendations/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+
+  return {
+    ...banner,
+    image: toAbsoluteUrl(banner.image) ?? banner.image,
+  };
+}
+
+export async function updateAdminBanner(token: string, id: string, payload: AdminBannerPayload) {
+  const banner = await fetchMutation<AdminBanner>(
+    `/api/v1/promotions/admin/recommendations/${id}/`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      headers: authHeaders(token),
+    }
+  );
+
+  return {
+    ...banner,
+    image: toAbsoluteUrl(banner.image) ?? banner.image,
+  };
+}
+
+export async function patchAdminBanner(
+  token: string,
+  id: string,
+  payload: Partial<AdminBannerPayload>
+) {
+  const banner = await fetchMutation<AdminBanner>(
+    `/api/v1/promotions/admin/recommendations/${id}/`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+      headers: authHeaders(token),
+    }
+  );
+
+  return {
+    ...banner,
+    image: toAbsoluteUrl(banner.image) ?? banner.image,
+  };
+}
+
+export async function deleteAdminBanner(token: string, id: string) {
+  await fetchMutation<void>(`/api/v1/promotions/admin/recommendations/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export async function getAdminCategories(token: string) {
@@ -900,7 +1290,9 @@ export async function getAdminProducts(token?: string | null) {
         }
       );
 
-      return extractCollection<AdminCatalogProduct>(payload).map(normalizeAdminProduct);
+      return extractCollection<AdminCatalogProduct>(payload).map((product) =>
+        normalizeAdminProduct(product)
+      );
     } catch (error) {
       console.warn("Admin products indisponibles, fallback catalogue public.", error);
     }
@@ -922,11 +1314,19 @@ export async function createAdminCategory(token: string, payload: AdminCategoryP
 export async function createAdminProduct(token: string, payload: AdminCatalogProductPayload) {
   const sanitizedPayload = sanitizeAdminProductPayload(payload);
 
-  const product = await fetchMutation<AdminCatalogProduct>("/api/v1/catalog/admin/products/", {
-    method: "POST",
-    body: JSON.stringify(sanitizedPayload),
-    headers: authHeaders(token),
-  });
+  const product = await fetchMutation<AdminCatalogProduct>(
+    "/api/v1/catalog/admin/products/",
+    {
+      method: "POST",
+      body: JSON.stringify(sanitizedPayload),
+      headers: authHeaders(token),
+    },
+    { retries: 3 }
+  );
+
+  if (!product?.id) {
+    throw new Error("Le backend n'a pas renvoye l'identifiant du produit cree.");
+  }
 
   return normalizeAdminProduct(product);
 }
@@ -935,38 +1335,134 @@ export async function createAdminProductVariant(
   token: string,
   payload: AdminProductVariantPayload
 ) {
-  return fetchMutation<AdminProductVariant>("/api/v1/catalog/admin/product-variants/", {
-    method: "POST",
-    body: JSON.stringify(payload),
-    headers: {
-      Authorization: `Token ${token}`,
-    },
+  const variant = await fetchMutation<AdminProductVariant>(
+    "/api/v1/catalog/admin/product-variants/",
+    {
+      method: "POST",
+      body: JSON.stringify(sanitizeAdminProductVariantPayload(payload)),
+      headers: authHeaders(token),
+    }
+  );
+
+  return variant;
+}
+
+export async function getAdminProductVariantById(token: string, id: string) {
+  return fetchJson<AdminProductVariant>(`/api/v1/catalog/admin/product-variants/${id}/`, {
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateAdminProductVariant(
+  token: string,
+  id: string,
+  payload: AdminProductVariantPayload
+) {
+  return fetchMutation<AdminProductVariant>(
+    `/api/v1/catalog/admin/product-variants/${id}/`,
+    {
+      method: "PUT",
+      body: JSON.stringify(sanitizeAdminProductVariantPayload(payload)),
+      headers: authHeaders(token),
+    }
+  );
+}
+
+export async function patchAdminProductVariant(
+  token: string,
+  id: string,
+  payload: AdminProductVariantPatchPayload
+) {
+  return fetchMutation<AdminProductVariant>(
+    `/api/v1/catalog/admin/product-variants/${id}/`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(sanitizeAdminProductVariantPayload(payload)),
+      headers: authHeaders(token),
+    }
+  );
+}
+
+export async function deleteAdminProductVariant(token: string, id: string) {
+  await fetchMutation<void>(`/api/v1/catalog/admin/product-variants/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
   });
 }
 
 export async function createAdminProductImage(token: string, payload: AdminProductImagePayload) {
-  const formData = new FormData();
-  formData.append("product", payload.product);
-  formData.append("image", payload.image, payload.image.name);
-  formData.append("alt_text", payload.alt_text);
-  formData.append("is_primary", String(payload.is_primary));
-
-  if (payload.is_active !== undefined) {
-    formData.append("is_active", String(payload.is_active));
-  }
-
+  const useJson = typeof payload.image === "string";
   const image = await fetchMutation<AdminProductImage>(
     "/api/v1/catalog/admin/product-images/",
     {
       method: "POST",
-      body: formData,
-      headers: {
-        Authorization: `Token ${token}`,
-      },
+      body: useJson
+        ? buildProductImageJsonBody(payload)
+        : buildProductImageFormData(payload),
+      headers: authHeaders(token),
+    },
+    { retries: 2 }
+  );
+
+  return normalizeAdminProductImage(image);
+}
+
+export async function getAdminProductImageById(token: string, id: string) {
+  const image = await fetchJson<AdminProductImage>(
+    `/api/v1/catalog/admin/product-images/${id}/`,
+    {
+      headers: authHeaders(token),
     }
   );
 
   return normalizeAdminProductImage(image);
+}
+
+export async function updateAdminProductImage(
+  token: string,
+  id: string,
+  payload: AdminProductImagePayload
+) {
+  const useJson = typeof payload.image === "string";
+  const image = await fetchMutation<AdminProductImage>(
+    `/api/v1/catalog/admin/product-images/${id}/`,
+    {
+      method: "PUT",
+      body: useJson
+        ? buildProductImageJsonBody(payload)
+        : buildProductImageFormData(payload),
+      headers: authHeaders(token),
+    }
+  );
+
+  return normalizeAdminProductImage(image);
+}
+
+export async function patchAdminProductImage(
+  token: string,
+  id: string,
+  payload: AdminProductImagePatchPayload
+) {
+  const useJson = !(payload.image instanceof File);
+  const image = await fetchMutation<AdminProductImage>(
+    `/api/v1/catalog/admin/product-images/${id}/`,
+    {
+      method: "PATCH",
+      body: useJson
+        ? JSON.stringify(payload)
+        : buildProductImageFormData(payload),
+      headers: authHeaders(token),
+    }
+  );
+
+  return normalizeAdminProductImage(image);
+}
+
+export async function deleteAdminProductImage(token: string, id: string) {
+  await fetchMutation<void>(`/api/v1/catalog/admin/product-images/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export async function getAdminProductImages(token?: string | null) {
@@ -1027,10 +1523,11 @@ export async function updateAdminProduct(
       method: "PUT",
       body: JSON.stringify(sanitizedPayload),
       headers: authHeaders(token),
-    }
+    },
+    { retries: 3 }
   );
 
-  return normalizeAdminProduct(product);
+  return normalizeAdminProduct(product, id);
 }
 
 export async function patchAdminProduct(
@@ -1047,7 +1544,7 @@ export async function patchAdminProduct(
     }
   );
 
-  return normalizeAdminProduct(product);
+  return normalizeAdminProduct(product, id);
 }
 
 export async function deleteAdminProduct(token: string, id: string) {
@@ -1143,10 +1640,9 @@ export type MyRating = {
 };
 
 export async function getMyRatings(token: string) {
-  const payload = await getFirstWorkingPayload<MyRating[]>(
-    ["/api/v1/catalog/notes-products/mes-notes/"],
-    { headers: authHeaders(token) }
-  );
+  const payload = await fetchJson<MyRating[]>("/api/v1/catalog/notes-products/mes-notes/", {
+    headers: authHeaders(token),
+  });
   return extractCollection<MyRating>(payload);
 }
 
@@ -1160,27 +1656,18 @@ export type RateProductResponse = {
 };
 
 export async function rateProduct(token: string, productId: string, score: number) {
-  return fetchMutationFirst<RateProductResponse>(
-    ["/api/v1/catalog/notes-products/", "/api/v1/catalog/rate/", "/api/v1/ratings/rate/"],
-    {
-      method: "POST",
-      body: JSON.stringify({ product_id: productId, score }),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<RateProductResponse>("/api/v1/catalog/notes-products/", {
+    method: "POST",
+    body: JSON.stringify({ product_id: productId, score }),
+    headers: authHeaders(token),
+  });
 }
 
 export async function deleteProductRating(token: string, ratingId: string) {
-  await fetchMutationFirst<void>(
-    [
-      `/api/v1/catalog/notes-products/delete/${ratingId}/`,
-      `/api/v1/ratings/${ratingId}/delete/`,
-    ],
-    {
-      method: "DELETE",
-      headers: authHeaders(token),
-    }
-  );
+  await fetchMutation<void>(`/api/v1/catalog/notes-products/delete/${ratingId}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export type ToggleFavoriteResponse = {
@@ -1201,14 +1688,9 @@ export type FavoriteProduct = {
 };
 
 export async function getMyFavorites(token: string) {
-  const payload = await getFirstWorkingPayload<FavoriteProduct[]>(
-    [
-      "/api/v1/catalog/products/my-favorites/",
-      "/api/v1/catalog/my-favorites/",
-      "/api/v1/favorites/my-favorites/",
-    ],
-    { headers: authHeaders(token) }
-  );
+  const payload = await fetchJson<FavoriteProduct[]>("/api/v1/catalog/products/my-favorites/", {
+    headers: authHeaders(token),
+  });
 
   return extractCollection<FavoriteProduct>(payload).map((item) => ({
     ...item,
@@ -1217,27 +1699,18 @@ export async function getMyFavorites(token: string) {
 }
 
 export async function toggleFavorite(token: string, productId: string) {
-  return fetchMutationFirst<ToggleFavoriteResponse>(
-    ["/api/v1/catalog/favorites-toggle/", "/api/v1/catalog/toggle/", "/api/v1/favorites/toggle/"],
-    {
-      method: "POST",
-      body: JSON.stringify({ product_id: productId }),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<ToggleFavoriteResponse>("/api/v1/catalog/favorites-toggle/", {
+    method: "POST",
+    body: JSON.stringify({ product_id: productId }),
+    headers: authHeaders(token),
+  });
 }
 
 export async function deleteFavorite(token: string, favoriteId: string) {
-  await fetchMutationFirst<void>(
-    [
-      `/api/v1/catalog/favorites-delete/${favoriteId}/`,
-      `/api/v1/favorites/${favoriteId}/`,
-    ],
-    {
-      method: "DELETE",
-      headers: authHeaders(token),
-    }
-  );
+  await fetchMutation<void>(`/api/v1/catalog/favorites-delete/${favoriteId}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export type OrderSummary = {
@@ -1278,33 +1751,62 @@ export type OrderFilters = {
   created_before?: string;
 };
 
+export function formatOrderStatus(status: string) {
+  const normalized = status.trim().toLowerCase();
+
+  const labels: Record<string, string> = {
+    pending_payment: "En attente de paiement",
+    paid: "Payee",
+    processing: "En preparation",
+    shipped: "Expediee",
+    delivered: "Livree",
+    cancelled: "Annulee",
+    canceled: "Annulee",
+    refunded: "Remboursee",
+  };
+
+  return labels[normalized] ?? status.replace(/_/g, " ");
+}
+
+export function formatOrderDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export async function getOrders(token: string, filters?: OrderFilters) {
   const query = buildQueryString(filters);
-  const payload = await getFirstWorkingPayload<OrderSummary[]>(
-    [`/api/v1/commandes/mes-commandes/${query}`, `/api/v1/commandes/${query}`],
-    { headers: authHeaders(token) }
-  );
+  const endpoint = query
+    ? `/api/v1/commandes/mes-commandes/${query}`
+    : "/api/v1/commandes/mes-commandes/";
+
+  const payload = await fetchJson<OrderSummary[] | Paginated<OrderSummary>>(endpoint, {
+    headers: authHeaders(token),
+  });
+
   return extractCollection<OrderSummary>(payload);
 }
 
 export async function getOrderByReference(token: string, reference: string) {
-  return getFirstWorkingPayload<OrderDetail>(
-    [
-      `/api/v1/commandes/mes-commandes/${reference}/`,
-      `/api/v1/commandes/${reference}/`,
-    ],
-    { headers: authHeaders(token) }
-  );
+  return fetchJson<OrderDetail>(`/api/v1/commandes/mes-commandes/${reference}/`, {
+    headers: authHeaders(token),
+  });
 }
 
 export async function cancelOrder(token: string, reference: string) {
-  return fetchMutationFirst<void>(
-    [
-      `/api/v1/commandes/mes-commandes/${reference}/cancel/`,
-      `/api/v1/commandes/${reference}/cancel/`,
-    ],
-    { method: "POST", headers: authHeaders(token) }
-  );
+  return fetchMutation<void>(`/api/v1/commandes/mes-commandes/${reference}/cancel/`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
 }
 
 export type OrderHistoryEntry = {
@@ -1317,11 +1819,8 @@ export type OrderHistoryEntry = {
 };
 
 export async function getOrderHistory(token: string, reference: string) {
-  const payload = await getFirstWorkingPayload<OrderHistoryEntry[]>(
-    [
-      `/api/v1/commandes/mes-commandes/${reference}/historique/`,
-      `/api/v1/commandes/${reference}/history/`,
-    ],
+  const payload = await fetchJson<OrderHistoryEntry[]>(
+    `/api/v1/commandes/mes-commandes/${reference}/historique/`,
     { headers: authHeaders(token) }
   );
   return extractCollection<OrderHistoryEntry>(payload);
@@ -1365,15 +1864,62 @@ export type CheckoutPayload = {
   city: string;
   country: string;
   notes?: string;
-  items: Array<{ product_id: string; quantity: number }>;
+  items: Array<{ product_id: string; quantity: number; variant_id?: string | null }>;
+};
+
+export type CheckoutResponse = {
+  id: string;
+  reference: string;
+  status: string;
+  address_livraison: string;
+  phone_livraison: string;
+  city: string;
+  country: string;
+  items_total: string;
+  frais_livraison: string;
+  discount_amount: string;
+  tax_amount: string;
+  total_final: string;
+  notes?: string;
+  paid_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  items?: Array<{
+    id: string;
+    product: string;
+    product_name: string;
+    product_sku: string;
+    quantity: number;
+    unit_price: string;
+    subtotal: string;
+  }>;
 };
 
 export async function checkoutOrder(token: string, payload: CheckoutPayload) {
-  return fetchMutationFirst<CheckoutPayload & { reference?: string; id?: string }>(
-    ["/api/v1/commandes/validate-commandes/", "/api/v1/commandes/checkout/"],
+  const sanitizedItems = payload.items
+    .filter((item) => item.product_id?.trim() && item.quantity > 0)
+    .map((item) => ({
+      product_id: item.product_id.trim(),
+      quantity: Math.max(1, Math.floor(item.quantity)),
+      ...(item.variant_id ? { variant_id: item.variant_id } : {}),
+    }));
+
+  if (sanitizedItems.length === 0) {
+    throw new Error("Aucun article valide dans le panier.");
+  }
+
+  return fetchMutation<CheckoutResponse>(
+    "/api/v1/commandes/validate-commandes/",
     {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        address_livraison: payload.address_livraison.trim().slice(0, 255),
+        phone_livraison: payload.phone_livraison.trim().slice(0, 30),
+        city: payload.city.trim().slice(0, 100),
+        country: payload.country.trim().slice(0, 100),
+        notes: payload.notes?.trim() || "",
+        items: sanitizedItems,
+      }),
       headers: authHeaders(token),
     }
   );
@@ -1388,10 +1934,9 @@ export type WalletBalance = {
 };
 
 export async function getWalletBalance(token: string) {
-  return getFirstWorkingPayload<WalletBalance>(
-    ["/api/v1/paiements/my-wallet/", "/api/v1/paiements/wallet/"],
-    { headers: authHeaders(token) }
-  );
+  return fetchJson<WalletBalance>("/api/v1/paiements/my-wallet/", {
+    headers: authHeaders(token),
+  });
 }
 
 export type WalletTransaction = {
@@ -1405,11 +1950,8 @@ export type WalletTransaction = {
 };
 
 export async function getWalletTransactions(token: string) {
-  const payload = await getFirstWorkingPayload<WalletTransaction[]>(
-    [
-      "/api/v1/paiements/wallet/historique-transactions/",
-      "/api/v1/paiements/wallet/transactions/",
-    ],
+  const payload = await fetchJson<WalletTransaction[]>(
+    "/api/v1/paiements/wallet/historique-transactions/",
     { headers: authHeaders(token) }
   );
   return extractCollection<WalletTransaction>(payload);
@@ -1427,14 +1969,11 @@ export type ValidatePromoResponse = {
 };
 
 export async function validatePromoCode(token: string, code: string, cartTotal: string) {
-  return fetchMutationFirst<ValidatePromoResponse>(
-    ["/api/v1/promotions/codes-promo/validate/", "/api/v1/promotions/codes/validate/"],
-    {
-      method: "POST",
-      body: JSON.stringify({ code, cart_total: cartTotal }),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<ValidatePromoResponse>("/api/v1/promotions/codes-promo/validate/", {
+    method: "POST",
+    body: JSON.stringify({ code, cart_total: cartTotal }),
+    headers: authHeaders(token),
+  });
 }
 
 // --- Admin wallet & payments ---
@@ -1468,19 +2007,16 @@ export type AdminWithdrawPayload = {
 };
 
 export async function getAdminAllWallets(token: string) {
-  const payload = await getFirstWorkingPayload<AdminWallet[]>(
-    ["/api/v1/paiements/admin/all-wallets/", "/api/v1/paiements/admin/wallets/"],
+  const payload = await fetchJson<AdminWallet[] | Paginated<AdminWallet>>(
+    "/api/v1/paiements/admin/all-wallets/",
     { headers: authHeaders(token) }
   );
   return extractCollection<AdminWallet>(payload);
 }
 
 export async function getAdminAllTransactions(token: string) {
-  const payload = await getFirstWorkingPayload<AdminTransaction[]>(
-    [
-      "/api/v1/paiements/admin/all-transactions/",
-      "/api/v1/paiements/admin/transactions/",
-    ],
+  const payload = await fetchJson<AdminTransaction[]>(
+    "/api/v1/paiements/admin/all-transactions/",
     { headers: authHeaders(token) }
   );
   return extractCollection<AdminTransaction>(payload);
@@ -1491,28 +2027,19 @@ export async function updateAdminWalletStatus(
   walletId: string,
   status: AdminWallet["status"]
 ) {
-  return fetchMutationFirst<AdminWallet>(
-    [
-      `/api/v1/paiements/admin/wallets/${walletId}/status/`,
-      `/api/v1/paiements/admin/wallets/${walletId}/`,
-    ],
-    {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<AdminWallet>(`/api/v1/paiements/admin/wallets/${walletId}/status/`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+    headers: authHeaders(token),
+  });
 }
 
 export async function adminWithdrawFunds(token: string, payload: AdminWithdrawPayload) {
-  return fetchMutationFirst<Record<string, unknown>>(
-    ["/api/v1/paiements/admin/retrait-fonds/", "/api/v1/paiements/admin/withdraw/"],
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<Record<string, unknown>>("/api/v1/paiements/admin/retrait-fonds/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
 }
 
 // --- Admin loyalty ---
@@ -1547,23 +2074,16 @@ export type AdminAdjustPointsPayload = {
 export type AdminLoyaltyProfilePayload = Record<string, unknown>;
 
 export async function getAdminLoyaltyProfiles(token: string) {
-  const payload = await getFirstWorkingPayload<AdminLoyaltyProfile[]>(
-    [
-      "/api/v1/fidelites/admin/profiles/",
-      "/api/v1/loyalty/admin/profiles/",
-    ],
+  const payload = await fetchJson<AdminLoyaltyProfile[] | Paginated<AdminLoyaltyProfile>>(
+    "/api/v1/fidelites/admin/profiles/",
     { headers: authHeaders(token) }
   );
   return extractCollection<AdminLoyaltyProfile>(payload);
 }
 
 export async function getLoyaltyTiers(token: string) {
-  const payload = await getFirstWorkingPayload<LoyaltyTier[]>(
-    [
-      "/api/v1/fidelites/liste-des-grades/",
-      "/api/v1/fidelites/tiers/",
-      "/api/v1/loyalty/tiers/",
-    ],
+  const payload = await fetchJson<LoyaltyTier[] | Paginated<LoyaltyTier>>(
+    "/api/v1/fidelites/liste-des-grades/",
     { headers: authHeaders(token) }
   );
   return extractCollection<LoyaltyTier>(payload);
@@ -1573,17 +2093,11 @@ export async function createAdminLoyaltyProfile(
   token: string,
   payload: AdminLoyaltyProfilePayload
 ) {
-  return fetchMutationFirst<AdminLoyaltyProfile>(
-    [
-      "/api/v1/fidelites/admin/profiles/",
-      "/api/v1/loyalty/admin/profiles/",
-    ],
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<AdminLoyaltyProfile>("/api/v1/fidelites/admin/profiles/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
 }
 
 export async function patchAdminLoyaltyProfile(
@@ -1591,50 +2105,140 @@ export async function patchAdminLoyaltyProfile(
   id: string,
   payload: AdminLoyaltyProfilePayload
 ) {
-  return fetchMutationFirst<AdminLoyaltyProfile>(
-    [
-      `/api/v1/fidelites/admin/profiles/${id}/`,
-      `/api/v1/loyalty/admin/profiles/${id}/`,
-    ],
-    {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-      headers: authHeaders(token),
-    }
-  );
+  return fetchMutation<AdminLoyaltyProfile>(`/api/v1/fidelites/admin/profiles/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
 }
 
 export async function deleteAdminLoyaltyProfile(token: string, id: string) {
-  await fetchMutationFirst<void>(
-    [
-      `/api/v1/fidelites/admin/profiles/${id}/`,
-      `/api/v1/loyalty/admin/profiles/${id}/`,
-    ],
-    {
-      method: "DELETE",
-      headers: authHeaders(token),
-    }
-  );
+  await fetchMutation<void>(`/api/v1/fidelites/admin/profiles/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }
 
 export async function adjustAdminLoyaltyPoints(
   token: string,
   payload: AdminAdjustPointsPayload
 ) {
-  return fetchMutationFirst<{
+  return fetchMutation<{
     success: boolean;
     user_email?: string;
     points_adjusted?: number;
     new_balance?: number;
-  }>(
-    [
-      "/api/v1/fidelites/admin/profiles/adjust_points/",
-      "/api/v1/loyalty/admin/profiles/adjust_points/",
-    ],
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: authHeaders(token),
-    }
+  }>("/api/v1/fidelites/admin/profiles/adjust_points/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export type CustomerLoyaltyProfile = {
+  id: string;
+  tier_name?: string;
+  points_balance?: number;
+  total_points_earned?: number;
+  total_solde?: string;
+  next_tier?: string | null;
+  tier?: LoyaltyTier | null;
+};
+
+export type LoyaltyEvent = {
+  id: string;
+  points_delta: number;
+  new_points_balance_after: number;
+  reason: string;
+  reason_display: string;
+  description: string;
+  created_at: string;
+};
+
+export type AdminTierPayload = {
+  name: string;
+  min_points?: number;
+  min_solde?: string;
+  discount_percent?: string;
+};
+
+export async function getMyLoyaltyProfile(token: string) {
+  return fetchJson<CustomerLoyaltyProfile>("/api/v1/fidelites/mon-profil-fidelite/", {
+    headers: authHeaders(token),
+  });
+}
+
+export async function getLoyaltyEvents(token: string) {
+  const payload = await fetchJson<LoyaltyEvent[]>("/api/v1/fidelites/historique-utilisation/", {
+    headers: authHeaders(token),
+  });
+  return extractCollection<LoyaltyEvent>(payload);
+}
+
+export async function redeemLoyaltyPoints(
+  token: string,
+  payload: { points_to_spend: number; order_id: string }
+) {
+  return fetchMutation<{
+    success: boolean;
+    points_spent: number;
+    discount_amount: string;
+    order_total_after: string;
+  }>("/api/v1/fidelites/depenser-mes-points/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function getPublicLoyaltyTiers() {
+  const payload = await fetchJson<LoyaltyTier[]>("/api/v1/fidelites/liste-des-grades/");
+  return extractCollection<LoyaltyTier>(payload);
+}
+
+export async function getAdminLoyaltyTiers(token: string) {
+  const payload = await fetchJson<LoyaltyTier[] | Paginated<LoyaltyTier>>(
+    "/api/v1/fidelites/admin/tiers/",
+    { headers: authHeaders(token) }
   );
+  return extractCollection<LoyaltyTier>(payload);
+}
+
+export async function createAdminLoyaltyTier(token: string, payload: AdminTierPayload) {
+  return fetchMutation<LoyaltyTier>("/api/v1/fidelites/admin/tiers/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function updateAdminLoyaltyTier(
+  token: string,
+  id: string,
+  payload: AdminTierPayload
+) {
+  return fetchMutation<LoyaltyTier>(`/api/v1/fidelites/admin/tiers/${id}/`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function patchAdminLoyaltyTier(
+  token: string,
+  id: string,
+  payload: Partial<AdminTierPayload>
+) {
+  return fetchMutation<LoyaltyTier>(`/api/v1/fidelites/admin/tiers/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    headers: authHeaders(token),
+  });
+}
+
+export async function deleteAdminLoyaltyTier(token: string, id: string) {
+  await fetchMutation<void>(`/api/v1/fidelites/admin/tiers/${id}/`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
 }

@@ -1,13 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useState, useTransition } from "react";
-import {
-  applyPostLoginRedirect,
-  hasAdminAccess,
-  login,
-  register,
-} from "@/lib/auth";
+import { useRouter } from "next/navigation";
+import { Leaf, Lock, Mail, UserRound } from "lucide-react";
+import { logoImage } from "@/assets/images";
+import { register } from "@/lib/auth";
 
 export function RegisterForm({
   redirectPath,
@@ -25,6 +24,7 @@ export function RegisterForm({
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
 
   function validatePassword(password: string) {
     if (password.length < 8) {
@@ -67,11 +67,11 @@ export function RegisterForm({
           password2,
         });
 
-        const session = await login(email.trim(), password1);
-        applyPostLoginRedirect(
-          session,
-          redirectPath ?? (hasAdminAccess(session) ? "/admin" : null)
-        );
+        const params = new URLSearchParams({ registered: "1" });
+        if (redirectPath) {
+          params.set("redirect", redirectPath);
+        }
+        router.push(`${loginHref}?${params.toString()}`);
       } catch (submissionError) {
         setError(
           submissionError instanceof Error
@@ -84,14 +84,18 @@ export function RegisterForm({
 
   return (
     <div className="relative w-full max-w-md">
-      <div className="overflow-hidden rounded-[2rem] border border-[#d6dfd2] bg-white shadow-[0_28px_80px_rgba(24,37,24,0.14)]">
-        <div className="bg-gradient-to-r from-[#1f4d3f] to-[#8b5e34] px-8 py-8 text-center text-white">
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/18 text-2xl backdrop-blur-sm">
-            +
+      <Leaf className="pointer-events-none absolute -left-5 top-10 h-9 w-9 rotate-[-18deg] text-[#8b5e34]/25" />
+      <Leaf className="pointer-events-none absolute -right-6 bottom-20 h-11 w-11 rotate-[22deg] text-[#1f4d3f]/20" />
+
+      <div className="overflow-hidden rounded-[2rem] border border-[#d6dfd2] bg-white/95 shadow-[0_28px_80px_rgba(24,37,24,0.14)] backdrop-blur-sm">
+        <div className="relative bg-gradient-to-r from-[#1f4d3f] to-[#8b5e34] px-8 py-8 text-center text-white">
+          <div className="pointer-events-none absolute -left-8 -top-8 h-24 w-24 rounded-full bg-white/10 blur-2xl" />
+          <div className="relative mx-auto mb-3 flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-white/25 bg-white/15 backdrop-blur-sm">
+            <Image src={logoImage} alt="Atelier du Terroir" fill className="object-contain p-2" sizes="64px" />
           </div>
           <h1 className="text-2xl font-bold">Creer un compte</h1>
           <p className="mt-1 text-sm text-white/82">
-            Meme inscription pour tous. Le role admin est attribue cote backend si necessaire.
+            Rejoignez la communaute Atelier du Terroir
           </p>
         </div>
 
@@ -105,9 +109,7 @@ export function RegisterForm({
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Nom</span>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                @
-              </span>
+              <UserRound className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7c8978]" />
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
                 value={name}
@@ -122,9 +124,7 @@ export function RegisterForm({
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Adresse email</span>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                @
-              </span>
+              <Mail className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7c8978]" />
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-4 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
                 type="email"
@@ -140,9 +140,7 @@ export function RegisterForm({
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Mot de passe</span>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                *
-              </span>
+              <Lock className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7c8978]" />
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
                 type={showPassword ? "text" : "password"}
@@ -169,9 +167,7 @@ export function RegisterForm({
           <label className="block space-y-2">
             <span className="text-sm font-medium text-[#2a3528]">Confirmer le mot de passe</span>
             <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-[#7c8978]">
-                *
-              </span>
+              <Lock className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7c8978]" />
               <input
                 className="w-full rounded-xl border border-[#d7ddcf] bg-[#fbfcf7] py-3 pl-11 pr-12 text-sm text-[#1c241b] outline-none transition focus:border-[#1f4d3f] focus:ring-2 focus:ring-[#dce8d8]"
                 type={showPassword ? "text" : "password"}
@@ -185,7 +181,7 @@ export function RegisterForm({
           </label>
 
           <button
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#8b5e34] to-[#704a28] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(139,94,52,0.24)] transition hover:shadow-[0_20px_40px_rgba(139,94,52,0.3)] disabled:cursor-not-allowed disabled:opacity-70"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#1f4d3f] to-[#17392f] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(31,77,63,0.24)] transition hover:shadow-[0_20px_40px_rgba(31,77,63,0.3)] disabled:cursor-not-allowed disabled:opacity-70"
             type="submit"
             disabled={isPending}
           >

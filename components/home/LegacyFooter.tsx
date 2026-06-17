@@ -4,15 +4,15 @@ import { logoImage } from "@/assets/images";
 
 const pageLinks = [
   { label: "Boutique", href: "/products" },
-  { label: "Contact", href: "/" },
-  { label: "A propos", href: "/" },
+  { label: "Contact", href: "/contact" },
+  { label: "A propos", href: "/about" },
 ];
 
 const solutionLinks = [
-  { label: "Produits locaux", href: "/products" },
-  { label: "Produits transformes", href: "/products" },
-  { label: "Export", href: "/products" },
-  { label: "Agrobusiness", href: "/" },
+  { label: "Produits locaux", href: "/products?filter=local" },
+  { label: "Produits transformes", href: "/products?filter=processed" },
+  { label: "Export", href: "/products?filter=export" },
+  { label: "Agrobusiness", href: "/about" },
 ];
 
 const phoneNumbers = ["+228 72318393", "+228 92226399", "+228 97014471"];
@@ -120,11 +120,11 @@ export function LegacyFooter() {
         <div className="flex flex-col items-center justify-between gap-3 border-t border-white/10 py-4 text-xs text-white/45 sm:flex-row">
           <p>&copy; 2026 Deal & Consulting. Tous droits reserves.</p>
           <div className="flex items-center gap-3">
-            <Link href="/" className="transition hover:text-white/75">
+            <Link href="/privacy" className="transition hover:text-white/75">
               Confidentialite
             </Link>
             <span>·</span>
-            <Link href="/" className="transition hover:text-white/75">
+            <Link href="/terms" className="transition hover:text-white/75">
               Conditions
             </Link>
           </div>

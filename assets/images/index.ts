@@ -1,4 +1,8 @@
 export { default as ananasImage } from "./ananas.jpg";
+export { default as authHeroImage } from "./solaire.png";
+export { default as authProduceImage } from "./img-AC.png";
+export { default as authVegetablesImage } from "./banner-17.png";
+export { default as authVeganImage } from "./img_10.png";
 export { default as chouxImage } from "./choux1.jpg";
 export { default as haricotImage } from "./haricot.png";
 export { default as lapinCardImage } from "./lapin.png";

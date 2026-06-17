@@ -18,8 +18,12 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { AdminAccessNotice } from "@/components/admin/AdminAccessNotice";
 import { useAuthSession } from "@/components/auth/useAuthSession";
-import { cn, formatCurrency, readApiError, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
+import { hasAdminAccess } from "@/lib/auth";
+import { cn, formatCurrency, readApiError, resolveMediaUrl, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
+import ProductImagesPanel from "./ProductImagesPanel";
+import ProductVariantsPanel from "./ProductVariantsPanel";
 import {
   type AdminCatalogProductPayload,
   type ProductTypeEnum,
@@ -27,6 +31,7 @@ import {
   createAdminProductImage,
   deleteAdminProduct,
   getAdminCategories,
+  getAdminProductById,
   getAdminProductImages,
   getAdminProducts,
   getAdminProductVariants,
@@ -142,7 +147,7 @@ function validateProductForm(
 function buildProductPayload(
   form: ProductFormState,
   selectedCategoryId: string,
-  relatedProductIds: string[]
+  /*relatedProductIds: string[]*/
 ): AdminCatalogProductPayload {
   const weightRaw = form.weight_grams.trim();
 
@@ -159,7 +164,7 @@ function buildProductPayload(
     seo_title: form.seo_title.trim().slice(0, 255) || null,
     seo_description: form.seo_description.trim() || null,
     is_top: form.is_top,
-    related_products: relatedProductIds,
+    /*related_products: relatedProductIds,*/
   };
 }
 
@@ -179,13 +184,15 @@ function mapProduct(product: AdminCatalogProduct): ProductRow {
     categoryName:
       typeof product.category === "object" ? product.category?.name || "" : String(product.category || ""),
     image:
-      product.images?.find((image) => image.is_primary)?.image ||
-      product.images?.[0]?.image ||
-      product.primary_image ||
-      product.image ||
-      product.image_url ||
-      product.thumbnail ||
-      "",
+      resolveMediaUrl(
+        product.images?.find((image) => image.is_primary)?.image ||
+          product.images?.[0]?.image ||
+          product.primary_image ||
+          product.image ||
+          product.image_url ||
+          product.thumbnail ||
+          ""
+      ) ?? "",
     productType: product.product_type || "RAW",
     variantsCount: product.variants?.length || 0,
     isTop: Boolean(product.is_top),
@@ -211,10 +218,14 @@ export default function ProductsSection() {
   const [formErrors, setFormErrors] = useState<ProductFormErrors>({});
   const [form, setForm] = useState<ProductFormState>(INITIAL_FORM);
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
-  const [relatedProductIds, setRelatedProductIds] = useState<string[]>([]);
+  /*const [relatedProductIds, setRelatedProductIds] = useState<string[]>([]);*/
   const [selectedImageId, setSelectedImageId] = useState("");
   const [uploadedImages, setUploadedImages] = useState<UploadedProductImage[]>([]);
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
+  const [modalTab, setModalTab] = useState<"info" | "images" | "variants">("info");
+  const [viewingProduct, setViewingProduct] = useState<AdminCatalogProduct | null>(null);
+  const [viewingLoading, setViewingLoading] = useState(false);
+  const [linkingLibraryImage, setLinkingLibraryImage] = useState(false);
 
   const rows = useMemo(() => products.map(mapProduct), [products]);
 
@@ -234,9 +245,11 @@ export default function ProductsSection() {
       total: rows.length,
       inStock: rows.filter((product) => product.status === "IN_STOCK").length,
       lowStock: rows.filter((product) => product.status === "LOW_STOCK").length,
-      variants: productVariants.length,
+      variants:
+        productVariants.length ||
+        products.reduce((sum, product) => sum + (product.variants?.length ?? 0), 0),
     }),
-    [rows, productVariants]
+    [rows, productVariants, products]
   );
 
   const selectedLibraryImage = productImages.find((image) => image.id === selectedImageId);
@@ -287,12 +300,12 @@ export default function ProductsSection() {
     }
   };
 
-  const loadCatalogData = async () => {
+  const loadCategories = async () => {
     setCatalogLoading(true);
-    const [categoriesResult, imagesResult, variantsResult] = await Promise.allSettled([
-      session?.token
-        ? getAdminCategories(session.token)
-        : getPublicCategories().then((items) =>
+    try {
+      const nextCategories = session?.token
+        ? await getAdminCategories(session.token)
+        : await getPublicCategories().then((items) =>
             items.map((category) => ({
               id: category.id,
               name: category.name,
@@ -301,16 +314,23 @@ export default function ProductsSection() {
               image: category.image,
               children: category.children ?? null,
             }))
-          ),
-      getAdminProductImages(session?.token),
-      getAdminProductVariants(session?.token),
-    ]);
-
-    if (categoriesResult.status === "fulfilled") {
-      setCategories(categoriesResult.value);
-    } else {
-      console.error("Error fetching categories:", categoriesResult.reason);
+          );
+      setCategories(nextCategories);
+    } catch (err) {
+      console.error("Error fetching categories:", err);
+      setError(readApiError(err, "Impossible de charger les catégories."));
+    } finally {
+      setCatalogLoading(false);
     }
+  };
+
+  const loadProductMedia = async () => {
+    if (!session?.token) return;
+
+    const [imagesResult, variantsResult] = await Promise.allSettled([
+      getAdminProductImages(session.token),
+      getAdminProductVariants(session.token),
+    ]);
 
     if (imagesResult.status === "fulfilled") {
       setProductImages(imagesResult.value);
@@ -324,29 +344,59 @@ export default function ProductsSection() {
       console.error("Error fetching product variants:", variantsResult.reason);
       setProductVariants([]);
     }
-
-    if (categoriesResult.status === "rejected" && imagesResult.status === "rejected") {
-      setError("Impossible de charger les catégories ou les images.");
-    }
-
-    setCatalogLoading(false);
   };
 
   useEffect(() => {
     void loadProducts();
-    void loadCatalogData();
+    void loadCategories();
   }, [session?.token]);
+
+  useEffect(() => {
+    if (!showModal || !session?.token) return;
+    void loadProductMedia();
+  }, [showModal, session?.token]);
 
   const resetForm = () => {
     setForm(INITIAL_FORM);
     setFormErrors({});
     setShowAdvancedFields(false);
     setSelectedCategoryId("");
-    setRelatedProductIds([]);
+    /*setRelatedProductIds([]);*/ 
     setSelectedImageId("");
     setUploadedImages([]);
     setPreviewImageIndex(0);
+    setModalTab("info");
     setEditingProductId(null);
+  };
+
+  const syncEditingProductImages = (nextImages: AdminProductImage[]) => {
+    if (!editingProductId) return;
+
+    setProducts((prev) =>
+      prev.map((product) =>
+        product.id === editingProductId ? { ...product, images: nextImages } : product
+      )
+    );
+    setProductImages((prev) => {
+      const merged = [...nextImages, ...prev.filter((image) => !nextImages.some((item) => item.id === image.id))];
+      return merged;
+    });
+  };
+
+  const syncProductVariants = (nextVariants: AdminProductVariant[]) => {
+    setProductVariants(nextVariants);
+    if (!editingProductId) return;
+
+    const productVariantsForProduct = nextVariants.filter(
+      (variant) => variant.product === editingProductId
+    );
+    setProducts((prev) =>
+      prev.map((product) =>
+        product.id === editingProductId
+          ? { ...product, variants: productVariantsForProduct }
+          : product
+      )
+    );
   };
 
   const openCreateModal = () => {
@@ -378,9 +428,9 @@ export default function ProductsSection() {
     setSelectedCategoryId(
       typeof product.category === "object" ? product.category?.id || "" : String(product.category || "")
     );
-    setRelatedProductIds(
+   /* setRelatedProductIds(
       (product.related_products ?? []).map((item) => (typeof item === "string" ? item : item.id))
-    );
+    );*/
     const primaryImageIndex = Math.max(
       product.images?.findIndex((image) => image.is_primary) ?? 0,
       0
@@ -388,15 +438,78 @@ export default function ProductsSection() {
     setSelectedImageId(product.images?.find((image) => image.is_primary)?.id || "");
     setUploadedImages([]);
     setPreviewImageIndex(primaryImageIndex);
+    setModalTab("info");
     setShowAdvancedFields(true);
     setError(null);
     setNotice(null);
     setShowModal(true);
   };
 
+  const openDetailModal = async (productId: string) => {
+    const cachedProduct = products.find((item) => item.id === productId);
+    if (cachedProduct) {
+      setViewingProduct(cachedProduct);
+    }
+
+    if (!session?.token) {
+      return;
+    }
+
+    setViewingLoading(true);
+    try {
+      const freshProduct = await getAdminProductById(session.token, productId);
+      setViewingProduct(freshProduct);
+    } catch (err) {
+      console.error("Error fetching product detail:", err);
+      if (!cachedProduct) {
+        setError(readApiError(err, "Impossible de charger le détail du produit."));
+      }
+    } finally {
+      setViewingLoading(false);
+    }
+  };
+
+  const handleLinkLibraryImage = async () => {
+    if (!session?.token || !editingProductId || !selectedLibraryImage?.image) {
+      return;
+    }
+
+    const alreadyLinked = existingProductImages.some((image) => image.id === selectedLibraryImage.id);
+    if (alreadyLinked) {
+      setNotice("Cette image est déjà liée au produit.");
+      return;
+    }
+
+    setLinkingLibraryImage(true);
+    setError(null);
+
+    try {
+      const savedImage = await createAdminProductImage(session.token, {
+        product: editingProductId,
+        image: selectedLibraryImage.image,
+        alt_text: form.alt_text || selectedLibraryImage.alt_text || form.name,
+        is_primary: existingProductImages.length === 0,
+        is_active: true,
+      });
+
+      syncEditingProductImages([savedImage, ...existingProductImages]);
+      setNotice("Image de la bibliothèque liée au produit.");
+      setSelectedImageId(savedImage.id);
+    } catch (err) {
+      console.error("Error linking library image:", err);
+      setError(readApiError(err, "Impossible de lier l'image au produit."));
+    } finally {
+      setLinkingLibraryImage(false);
+    }
+  };
+
   const closeModal = () => {
     setShowModal(false);
     resetForm();
+  };
+
+  const closeDetailModal = () => {
+    setViewingProduct(null);
   };
 
   const handleFormChange = (field: keyof ProductFormState, value: string | boolean) => {
@@ -474,17 +587,29 @@ export default function ProductsSection() {
       return;
     }
 
+    if (!hasAdminAccess(session)) {
+      setError("Ce compte n'a pas le rôle platform_admin requis pour créer un produit.");
+      setSaving(false);
+      return;
+    }
+
     try {
-      const payload = buildProductPayload(form, selectedCategoryId, relatedProductIds);
+      const payload = buildProductPayload(form, selectedCategoryId);
 
       const savedProduct = editingProductId
         ? await updateAdminProduct(session.token, editingProductId, payload)
         : await createAdminProduct(session.token, payload);
 
+      const productId = savedProduct.id || editingProductId;
+
+      if (!productId) {
+        throw new Error("Impossible de determiner l'identifiant du produit apres enregistrement.");
+      }
+
       const pendingUploads =
         uploadedImages.length > 0
           ? uploadedImages.map((image, index) => ({
-              product: savedProduct.id,
+              product: productId,
               image: image.file,
               alt_text: image.alt_text || form.alt_text || form.name,
               is_primary: index === 0,
@@ -493,29 +618,24 @@ export default function ProductsSection() {
           : [];
 
       let uploadedProductImages: AdminProductImage[] = [];
+      const failedUploads: unknown[] = [];
 
       if (pendingUploads.length > 0) {
-        const uploadResults = await Promise.allSettled(
-          pendingUploads.map((image) => createAdminProductImage(session.token, image))
-        );
+        for (const image of pendingUploads) {
+          try {
+            const uploaded = await createAdminProductImage(session.token, image);
+            uploadedProductImages.push(uploaded);
+          } catch (uploadError) {
+            console.error("Product image upload error:", uploadError);
+            failedUploads.push(uploadError);
+          }
+        }
 
-        uploadedProductImages = uploadResults
-          .filter(
-            (result): result is PromiseFulfilledResult<AdminProductImage> =>
-              result.status === "fulfilled"
-          )
-          .map((result) => result.value);
-
-        const failedUploads = uploadResults.filter((result) => result.status === "rejected");
         if (failedUploads.length > 0) {
-          console.error("Product image upload errors:", failedUploads);
-          failedUploads.forEach((result) => {
-            if (result.status === "rejected") {
-              console.error("Product image upload error payload:", result.reason);
-            }
-          });
+          const firstError = failedUploads[0];
+          const detail = readApiError(firstError, "Erreur inconnue");
           setNotice(
-            `${pendingUploads.length - failedUploads.length} image(s) liée(s) au produit, ${failedUploads.length} image(s) ont échoué.`
+            `${uploadedProductImages.length} image(s) liée(s) au produit, ${failedUploads.length} image(s) ont échoué. ${detail}`
           );
         }
       } else if (selectedLibraryImage?.image) {
@@ -564,7 +684,7 @@ export default function ProductsSection() {
       }
 
       closeModal();
-      void Promise.all([loadProducts(), loadCatalogData()]);
+      void loadProducts();
     } catch (err) {
       console.error("Error saving product:", err);
       console.error("Product payload sent:", {
@@ -634,6 +754,13 @@ export default function ProductsSection() {
           {error}
         </div>
       )}
+
+      {!hasAdminAccess(session) && session?.token ? (
+        <AdminAccessNotice
+          title="Création de produits indisponible"
+          description="La liste peut s'afficher via le catalogue public, mais la création et la modification nécessitent le rôle platform_admin."
+        />
+      ) : null}
 
       {notice && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
@@ -746,7 +873,10 @@ export default function ProductsSection() {
                     <td className="px-4 py-3 text-sm text-slate-500">{product.variantsCount}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <button className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-900">
+                        <button
+                          onClick={() => void openDetailModal(product.id)}
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-900"
+                        >
                           <Eye className="h-3.5 w-3.5" />
                         </button>
                         <button
@@ -790,13 +920,38 @@ export default function ProductsSection() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+              className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-full max-w-5xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
             >
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">
                     {editingProductId ? "Modifier le produit" : "Nouveau produit"}
                   </h3>
+                  {editingProductId ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(
+                        [
+                          { id: "info", label: "Informations" },
+                          { id: "images", label: "Images" },
+                          { id: "variants", label: "Variantes" },
+                        ] as const
+                      ).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setModalTab(tab.id)}
+                          className={cn(
+                            "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                            modalTab === tab.id
+                              ? "bg-primary text-white"
+                              : "bg-slate-100 text-slate-600 hover:bg-orange-50 hover:text-primary"
+                          )}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <p className="mt-1 text-xs text-slate-500">
                     Champs Swagger ProductCreateUpdate — les images sont uploadees apres creation.
                   </p>
@@ -806,6 +961,101 @@ export default function ProductsSection() {
                 </button>
               </div>
 
+              {editingProductId && modalTab === "variants" && session?.token ? (
+                <ProductVariantsPanel
+                  productId={editingProductId}
+                  token={session.token}
+                  variants={productVariants}
+                  onVariantsChange={syncProductVariants}
+                  onNotice={setNotice}
+                  onError={setError}
+                />
+              ) : editingProductId && modalTab === "images" && session?.token ? (
+                <div className="space-y-4">
+                  <ProductImagesPanel
+                    productId={editingProductId}
+                    token={session.token}
+                    images={existingProductImages}
+                    onImagesChange={syncEditingProductImages}
+                    onNotice={setNotice}
+                    onError={setError}
+                  />
+
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                      Téléverser une nouvelle image
+                    </label>
+                    <label className="flex h-28 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 hover:border-primary/40 hover:bg-orange-50/40">
+                      <div className="text-center">
+                        <Upload className="mx-auto h-6 w-6 text-slate-400" />
+                        <p className="mt-1 text-[11px] font-medium text-slate-600">
+                          Choisir une ou plusieurs images
+                        </p>
+                      </div>
+                      <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
+                    </label>
+                  </div>
+
+                  {uploadedImages.length > 0 ? (
+                    <p className="text-xs text-amber-700">
+                      {uploadedImages.length} image(s) seront liées au produit lors de l&apos;enregistrement
+                      (onglet Informations).
+                    </p>
+                  ) : null}
+
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label className="block text-xs font-medium text-slate-500">
+                        Bibliothèque d&apos;images
+                      </label>
+                      {selectedLibraryImage && !existingProductImages.some((image) => image.id === selectedLibraryImage.id) ? (
+                        <button
+                          type="button"
+                          disabled={linkingLibraryImage}
+                          onClick={() => void handleLinkLibraryImage()}
+                          className="rounded-lg bg-primary px-3 py-1 text-[11px] font-semibold text-white disabled:opacity-60"
+                        >
+                          {linkingLibraryImage ? "Liaison..." : "Lier au produit"}
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="grid max-h-56 grid-cols-2 gap-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      {productImages.map((image) => (
+                        <button
+                          key={image.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedImageId(image.id);
+                            setUploadedImages([]);
+                            setPreviewImageIndex(0);
+                          }}
+                          className={cn(
+                            "overflow-hidden rounded-xl border bg-white text-left transition-all",
+                            selectedImageId === image.id
+                              ? "border-primary ring-2 ring-primary/30 shadow-md"
+                              : "border-slate-200 hover:border-primary/40"
+                          )}
+                        >
+                          <div className="relative h-28 w-full bg-white">
+                            <Image
+                              src={image.image}
+                              alt={image.alt_text || "Image produit"}
+                              fill
+                              className="object-contain p-2"
+                              sizes="160px"
+                            />
+                          </div>
+                          <div className="p-2">
+                            <p className="truncate text-[10px] font-medium text-slate-700">
+                              {image.alt_text || "Sans texte alternatif"}
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
               <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="space-y-4">
                   <div>
@@ -948,7 +1198,7 @@ export default function ProductsSection() {
                     </div>
                   </div>
 
-                  <div>
+                {/*  <div>
                     <label className="mb-1.5 block text-xs font-medium text-slate-500">
                       related_products <span className="text-slate-400">(UUID[], optionnel)</span>
                     </label>
@@ -973,7 +1223,7 @@ export default function ProductsSection() {
                     <p className="mt-1 text-[10px] text-slate-400">
                       Maintenir Ctrl/Cmd pour selectionner plusieurs produits.
                     </p>
-                  </div>
+                  </div>*/}
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <button
@@ -1232,14 +1482,16 @@ export default function ProductsSection() {
                   </div>
                 </div>
               </div>
+              )}
 
               <div className="mt-5 flex justify-end gap-3">
                 <button
                   onClick={closeModal}
                   className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50"
                 >
-                  Annuler
+                  {editingProductId && modalTab !== "info" ? "Fermer" : "Annuler"}
                 </button>
+                {!editingProductId || modalTab === "info" ? (
                 <button
                   onClick={handleSaveProduct}
                   disabled={
@@ -1255,10 +1507,137 @@ export default function ProductsSection() {
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                   {editingProductId ? "Enregistrer" : "Créer"}
                 </button>
+                ) : null}
               </div>
             </motion.div>
           </>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {viewingProduct ? (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
+              onClick={closeDetailModal}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">{viewingProduct.name}</h3>
+                  <p className="text-xs text-slate-500">ProductDetail — lecture seule</p>
+                </div>
+                <button onClick={closeDetailModal} className="text-slate-400 hover:text-slate-900">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {viewingLoading ? (
+                <div className="flex items-center justify-center py-12 text-slate-500">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Chargement...
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div><span className="text-slate-500">id:</span> <span className="font-mono text-xs">{viewingProduct.id}</span></div>
+                    <div><span className="text-slate-500">sku:</span> {viewingProduct.sku}</div>
+                    <div><span className="text-slate-500">slug:</span> {viewingProduct.slug || "—"}</div>
+                    <div><span className="text-slate-500">product_type:</span> {viewingProduct.product_type}</div>
+                    <div><span className="text-slate-500">price:</span> {formatCurrency(parseFloat(viewingProduct.price), "FCFA")}</div>
+                    <div><span className="text-slate-500">stock:</span> {viewingProduct.stock ?? 0}</div>
+                    <div><span className="text-slate-500">weight_grams:</span> {viewingProduct.weight_grams ?? "—"}</div>
+                    <div><span className="text-slate-500">is_in_stock:</span> {viewingProduct.is_in_stock || "—"}</div>
+                    <div><span className="text-slate-500">is_top:</span> {viewingProduct.is_top ? "Oui" : "Non"}</div>
+                    <div><span className="text-slate-500">note_produit:</span> {viewingProduct.note_produit ?? "—"}</div>
+                    <div><span className="text-slate-500">count_ratings:</span> {viewingProduct.count_ratings ?? 0}</div>
+                    <div><span className="text-slate-500">count_favorites:</span> {viewingProduct.count_favorites ?? 0}</div>
+                  </div>
+
+                  {viewingProduct.description ? (
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-slate-500">description</p>
+                      <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                        {viewingProduct.description}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-slate-500">
+                      images ({viewingProduct.images?.length ?? 0})
+                    </p>
+                    <div className="grid grid-cols-4 gap-2">
+                      {(viewingProduct.images ?? []).map((image) => (
+                        <div key={image.id} className="relative h-20 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                          <Image src={image.image} alt={image.alt_text || "Image"} fill className="object-contain p-1" sizes="80px" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-slate-500">
+                      variants ({viewingProduct.variants?.length ?? 0})
+                    </p>
+                    {(viewingProduct.variants ?? []).length === 0 ? (
+                      <p className="text-xs text-slate-500">Aucune variante.</p>
+                    ) : (
+                      <div className="overflow-hidden rounded-xl border border-slate-200">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50">
+                            <tr>
+                              {["name", "sku", "price", "stock", "is_active"].map((header) => (
+                                <th key={header} className="px-3 py-2 font-semibold text-slate-500">{header}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(viewingProduct.variants ?? []).map((variant) => (
+                              <tr key={variant.id} className="border-t border-slate-100">
+                                <td className="px-3 py-2">{variant.name}</td>
+                                <td className="px-3 py-2">{variant.sku || "—"}</td>
+                                <td className="px-3 py-2">{formatCurrency(parseFloat(variant.price), "FCFA")}</td>
+                                <td className="px-3 py-2">{variant.stock ?? 0}</td>
+                                <td className="px-3 py-2">{variant.is_active ?? true ? "Oui" : "Non"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => {
+                        closeDetailModal();
+                        openEditModal(viewingProduct.id);
+                      }}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      Modifier
+                    </button>
+                    <button
+                      onClick={closeDetailModal}
+                      className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white"
+                    >
+                      Fermer
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </>
+        ) : null}
       </AnimatePresence>
     </div>
   );

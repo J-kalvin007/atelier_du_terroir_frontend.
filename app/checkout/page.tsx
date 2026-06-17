@@ -1,21 +1,58 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuthSession } from "@/components/auth/useAuthSession";
+import { clearSession, hasAdminAccess } from "@/lib/auth";
 import { checkoutOrder } from "@/lib/ecommerce-api";
-import { readApiError } from "@/lib/utils";
+import { isInvalidAuthTokenError, isUuid, readApiError } from "@/lib/utils";
 import { useCartStore } from "@/store/cartStore";
 import { LegacyHeader } from "@/components/home/LegacyHeader";
 import { LegacyFooter } from "@/components/home/LegacyFooter";
 
+function getCheckoutBlockReason(options: {
+  cartHydrated: boolean;
+  loading: boolean;
+  hasSession: boolean;
+  isAdminAccount: boolean;
+  itemsCount: number;
+  invalidCartItemsCount: number;
+}) {
+  if (!options.cartHydrated) {
+    return "Chargement du panier...";
+  }
+
+  if (options.loading) {
+    return "Traitement de la commande...";
+  }
+
+  if (!options.hasSession) {
+    return "Connectez-vous pour confirmer la commande.";
+  }
+
+  if (options.isAdminAccount) {
+    return "Les comptes administrateur ne peuvent pas passer commande.";
+  }
+
+  if (options.itemsCount === 0) {
+    return "Votre panier est vide.";
+  }
+
+  if (options.invalidCartItemsCount > 0) {
+    return "Certains articles du panier ont un identifiant invalide. Videz le panier puis rajoutez les produits.";
+  }
+
+  return null;
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const session = useAuthSession();
-  const { items, getTotal, clearCart } = useCartStore();
+  const { items, getTotal, clearCart, hasHydrated, pruneInvalidItems } = useCartStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [removedInvalidItems, setRemovedInvalidItems] = useState(0);
   const [form, setForm] = useState({
     address_livraison: "",
     phone_livraison: "",
@@ -24,27 +61,50 @@ export default function CheckoutPage() {
     notes: "",
   });
 
+  const isAdminAccount = hasAdminAccess(session);
+  const invalidCartItems = items.filter((item) => !isUuid(item.productId));
+
   useEffect(() => {
-    if (session?.role === "admin") {
-      router.replace("/admin");
+    if (!hasHydrated) {
+      return;
     }
-  }, [router, session?.role]);
+
+    const removedCount = pruneInvalidItems(isUuid);
+    if (removedCount > 0) {
+      setRemovedInvalidItems(removedCount);
+    }
+  }, [hasHydrated, pruneInvalidItems]);
+
+  const blockReason = useMemo(
+    () =>
+      getCheckoutBlockReason({
+        cartHydrated: hasHydrated,
+        loading,
+        hasSession: Boolean(session?.token),
+        isAdminAccount,
+        itemsCount: items.length,
+        invalidCartItemsCount: invalidCartItems.length,
+      }),
+    [
+      hasHydrated,
+      loading,
+      session?.token,
+      isAdminAccount,
+      items.length,
+      invalidCartItems.length,
+    ]
+  );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!session) {
-      router.push("/login?redirect=/checkout");
+    if (blockReason) {
+      setError(blockReason);
       return;
     }
 
-    if (session.role === "admin") {
-      setError("Le checkout est reserve aux comptes client. Utilise un compte client ou deconnecte-toi.");
-      return;
-    }
-
-    if (items.length === 0) {
-      setError("Votre panier est vide.");
+    if (!session?.token) {
+      router.push("/login?redirect=/checkout&reason=session-expired");
       return;
     }
 
@@ -57,15 +117,21 @@ export default function CheckoutPage() {
         items: items.map((item) => ({
           product_id: item.productId,
           quantity: item.quantity,
+          variant_id: item.variantId,
         })),
       });
       clearCart();
-      if (order.reference) {
-        router.push(`/?order=${order.reference}`);
-      } else {
-        router.push("/products?checkout=success");
-      }
+      router.push(
+        order.reference
+          ? `/orders?reference=${encodeURIComponent(order.reference)}`
+          : "/orders?checkout=success"
+      );
     } catch (err) {
+      if (isInvalidAuthTokenError(err)) {
+        clearSession();
+        setError("Votre session a expire. Reconnectez-vous pour confirmer la commande.");
+        return;
+      }
       setError(readApiError(err, "Impossible de finaliser la commande."));
     } finally {
       setLoading(false);
@@ -80,9 +146,54 @@ export default function CheckoutPage() {
           <div>
             <h1 className="text-3xl font-semibold">Finaliser la commande</h1>
             <p className="mt-2 text-sm text-[#5d6b58]">
-          Validation via `/api/v1/commandes/validate-commandes/`
-        </p>
+              Renseignez votre adresse de livraison pour confirmer la commande.
+            </p>
           </div>
+
+          {!session?.token ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <Link href="/login?redirect=/checkout" className="font-semibold underline">
+                Connectez-vous
+              </Link>{" "}
+              pour confirmer votre commande.
+            </div>
+          ) : null}
+
+          {isAdminAccount ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Vous etes connecte avec un compte administrateur. Pour acheter, deconnectez-vous puis
+              connectez-vous avec un compte client sur{" "}
+              <Link href="/login?redirect=/checkout" className="font-semibold underline">
+                /login
+              </Link>
+              .
+            </div>
+          ) : null}
+
+          {removedInvalidItems > 0 ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {removedInvalidItems} article(s) obsolete(s) ont ete retires du panier. Rajoutez les
+              produits depuis{" "}
+              <Link href="/products" className="font-semibold underline">
+                la boutique
+              </Link>
+              .
+            </div>
+          ) : null}
+
+          {invalidCartItems.length > 0 ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {invalidCartItems.length} article(s) du panier ont un identifiant invalide.{" "}
+              <button type="button" onClick={() => clearCart()} className="font-semibold underline">
+                Vider le panier
+              </button>{" "}
+              puis ajoutez les produits depuis{" "}
+              <Link href="/products" className="font-semibold underline">
+                la boutique
+              </Link>
+              .
+            </div>
+          ) : null}
 
           {error ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
@@ -125,7 +236,9 @@ export default function CheckoutPage() {
             </div>
 
             <div className="rounded-2xl bg-[#fbf5ed] px-4 py-3 text-sm">
-              {items.length} article(s) — Total: {getTotal().toLocaleString("fr-FR")} FCFA
+              {!hasHydrated
+                ? "Chargement du panier..."
+                : `${items.length} article(s) — Total: ${getTotal().toLocaleString("fr-FR")} FCFA`}
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -137,12 +250,16 @@ export default function CheckoutPage() {
               </Link>
               <button
                 type="submit"
-                disabled={loading || items.length === 0}
-                className="rounded-2xl bg-[#8b5e34] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={Boolean(blockReason)}
+                className="rounded-2xl bg-[#8b5e34] px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {loading ? "Traitement..." : "Confirmer la commande"}
               </button>
             </div>
+
+            {blockReason ? (
+              <p className="text-sm text-[#8b5e34]">{blockReason}</p>
+            ) : null}
           </form>
         </div>
       </main>
