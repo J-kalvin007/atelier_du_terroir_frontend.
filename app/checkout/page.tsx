@@ -6,7 +6,11 @@ import { useRouter } from "next/navigation";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import { clearSession, hasAdminAccess } from "@/lib/auth";
 import { checkoutOrder } from "@/lib/ecommerce-api";
-import { isInvalidAuthTokenError, isUuid, readApiError } from "@/lib/utils";
+import { appendOrderPromoMeta, saveOrderPromoSnapshot } from "@/lib/order-promo-meta";
+import { useApplyPromoCode } from "@/hooks/useApplyPromoCode";
+import { CheckoutTotalsSummary } from "@/components/promotions/CheckoutTotalsSummary";
+import { formatCurrency, isInvalidAuthTokenError, isUuid, readApiError } from "@/lib/utils";
+import { isFreeShippingPromoType } from "@/lib/shipping";
 import { useCartStore } from "@/store/cartStore";
 import { LegacyHeader } from "@/components/home/LegacyHeader";
 import { LegacyFooter } from "@/components/home/LegacyFooter";
@@ -49,7 +53,9 @@ function getCheckoutBlockReason(options: {
 export default function CheckoutPage() {
   const router = useRouter();
   const session = useAuthSession();
-  const { items, getTotal, clearCart, hasHydrated, pruneInvalidItems } = useCartStore();
+  const { revalidateActiveCode } = useApplyPromoCode();
+  const { items, getTotal, getSubtotal, getShippingFee, getShippingCharged, clearCart, hasHydrated, pruneInvalidItems, promoCode, promoDiscount, promoLabel, promoType, promoValue } =
+    useCartStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [removedInvalidItems, setRemovedInvalidItems] = useState(0);
@@ -74,6 +80,13 @@ export default function CheckoutPage() {
       setRemovedInvalidItems(removedCount);
     }
   }, [hasHydrated, pruneInvalidItems]);
+
+  useEffect(() => {
+    if (!hasHydrated || !promoCode || items.length === 0) {
+      return;
+    }
+    void revalidateActiveCode();
+  }, [hasHydrated, items, promoCode, revalidateActiveCode]);
 
   const blockReason = useMemo(
     () =>
@@ -112,14 +125,46 @@ export default function CheckoutPage() {
     setError(null);
 
     try {
+      const hasPromo =
+        Boolean(promoCode) &&
+        (promoDiscount > 0 || isFreeShippingPromoType(promoType));
+      const notesWithPromo = hasPromo
+          ? appendOrderPromoMeta(form.notes, {
+              code: promoCode!,
+              discount: promoDiscount,
+              type: promoType ?? undefined,
+              value: promoValue ?? undefined,
+              label: promoLabel ?? undefined,
+            })
+          : form.notes;
+
       const order = await checkoutOrder(session.token, {
         ...form,
+        notes: notesWithPromo,
+        promo_code: promoCode,
+        promo_discount: promoDiscount,
+        promo_label: promoLabel,
+        promo_type: promoType,
+        promo_value: promoValue,
+        free_shipping: isFreeShippingPromoType(promoType),
+        shipping_fee: getShippingFee(),
         items: items.map((item) => ({
           product_id: item.productId,
           quantity: item.quantity,
           variant_id: item.variantId,
         })),
       });
+
+      if (order.reference && hasPromo) {
+        saveOrderPromoSnapshot(order.reference, {
+          code: promoCode!,
+          discount: promoDiscount,
+          type: promoType ?? undefined,
+          value: promoValue ?? undefined,
+          label: promoLabel ?? undefined,
+        });
+      }
+
       clearCart();
       router.push(
         order.reference
@@ -236,9 +281,19 @@ export default function CheckoutPage() {
             </div>
 
             <div className="rounded-2xl bg-[#fbf5ed] px-4 py-3 text-sm">
-              {!hasHydrated
-                ? "Chargement du panier..."
-                : `${items.length} article(s) — Total: ${getTotal().toLocaleString("fr-FR")} FCFA`}
+              {!hasHydrated ? (
+                "Chargement du panier..."
+              ) : (
+                <CheckoutTotalsSummary
+                  subtotal={getSubtotal()}
+                  shippingFee={getShippingFee()}
+                  shippingCharged={getShippingCharged()}
+                  discount={promoDiscount}
+                  total={getTotal()}
+                  promoType={promoType}
+                  reductionLabel={promoLabel ? `Reduction (${promoLabel})` : "Reduction promo"}
+                />
+              )}
             </div>
 
             <div className="flex flex-wrap gap-3">

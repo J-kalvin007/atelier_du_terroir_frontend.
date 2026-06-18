@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminAccessNotice } from "@/components/admin/AdminAccessNotice";
+import { useConfirmDialog } from "@/components/admin/useConfirmDialog";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import { hasAdminAccess } from "@/lib/auth";
 import {
@@ -42,6 +43,7 @@ type UnifiedClient = {
 
 export default function ClientsSection() {
   const session = useAuthSession();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [wallets, setWallets] = useState<AdminWallet[]>([]);
   const [profiles, setProfiles] = useState<AdminLoyaltyProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -213,7 +215,14 @@ export default function ClientsSection() {
     if (!session?.token) return;
     const balanceNum = parseFloat(currentBalance);
     if (newStatus !== "active" && balanceNum > 0) {
-      if (!confirm("Le solde du client est superieur a 0. Continuer la restriction ?")) {
+      const confirmed = await confirm({
+        title: "Restreindre le wallet",
+        description:
+          "Le solde du client est supérieur à 0. Voulez-vous quand même appliquer cette restriction ?",
+        confirmLabel: "Continuer",
+        variant: "default",
+      });
+      if (!confirmed) {
         return;
       }
     }
@@ -516,6 +525,8 @@ export default function ClientsSection() {
           </>
         )}
       </AnimatePresence>
+
+      {confirmDialog}
     </div>
   );
 }

@@ -5,13 +5,33 @@ import Image from "next/image";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Minus, Plus, Trash2, ShoppingBag, ArrowRight } from "lucide-react";
+import { isFreeShippingPromoType } from "@/lib/shipping";
 import { formatCurrency } from "@/lib/utils";
+import { CheckoutTotalsSummary } from "@/components/promotions/CheckoutTotalsSummary";
+import { useApplyPromoCode } from "@/hooks/useApplyPromoCode";
 import { useCartStore } from "@/store/cartStore";
 
 export default function CartDrawer() {
-  const { items, isDrawerOpen, toggleDrawer, updateQuantity, removeItem, getTotal, getItemCount } =
-    useCartStore();
+  const {
+    items,
+    isDrawerOpen,
+    toggleDrawer,
+    updateQuantity,
+    removeItem,
+    getTotal,
+    getSubtotal,
+    getShippingFee,
+    getShippingCharged,
+    getItemCount,
+    promoDiscount,
+    promoLabel,
+    promoType,
+    setPromoCode,
+  } = useCartStore();
+  const { revalidateActiveCode } = useApplyPromoCode();
+  const promoCode = useCartStore((state) => state.promoCode);
   const itemCount = getItemCount();
+  const subtotal = getSubtotal();
   const total = getTotal();
 
   useEffect(() => {
@@ -20,6 +40,13 @@ export default function CartDrawer() {
       document.body.style.overflow = "";
     };
   }, [isDrawerOpen]);
+
+  useEffect(() => {
+    if (!isDrawerOpen || !promoCode) {
+      return;
+    }
+    void revalidateActiveCode();
+  }, [isDrawerOpen, items, promoCode, revalidateActiveCode]);
 
   return (
     <AnimatePresence>
@@ -140,10 +167,33 @@ export default function CartDrawer() {
 
             {items.length > 0 ? (
               <div className="border-t border-[#eadfce] px-6 py-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <span className="text-sm text-[#5d6b58]">Total</span>
-                  <span className="text-xl font-bold text-[#1f241c]">{formatCurrency(total, "FCFA")}</span>
-                </div>
+                {(promoDiscount > 0 || isFreeShippingPromoType(promoType)) && promoCode ? (
+                  <div className="mb-4 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm">
+                    <span className="font-semibold text-emerald-800">
+                      {isFreeShippingPromoType(promoType)
+                        ? "Livraison offerte appliquee"
+                        : `Reduction ${promoLabel ? `(${promoLabel})` : ""} appliquee`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPromoCode(null, 0, null, null)}
+                      className="text-xs font-medium text-[#8a9086] hover:text-red-500"
+                    >
+                      Retirer
+                    </button>
+                  </div>
+                ) : null}
+
+                <CheckoutTotalsSummary
+                  subtotal={subtotal}
+                  shippingFee={getShippingFee()}
+                  shippingCharged={getShippingCharged()}
+                  discount={promoDiscount}
+                  total={total}
+                  promoType={promoType}
+                  reductionLabel={promoLabel ? `Reduction (${promoLabel})` : "Reduction promo"}
+                  className="mb-4"
+                />
                 <Link
                   href="/checkout"
                   onClick={() => toggleDrawer(false)}

@@ -1,172 +1,308 @@
 "use client";
 
-import { useRef, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { motion } from "framer-motion";
-import { Apple, Carrot, Rabbit, Star, Heart, ArrowRight } from "lucide-react";
+import { ArrowRight, Leaf, Sparkles } from "lucide-react";
 import {
-  lapinHeroImage,
-  lapinCardImage,
-  tomateCardImage,
-  pimentShowcaseImage,
-  haricotImage,
-  oignonsImage,
-  poivronsImage,
-  maisGridImage,
   chouxImage,
+  haricotImage,
+  maisGridImage,
+  oignonsImage,
+  pimentShowcaseImage,
+  poivronsImage,
+  tomateCardImage,
 } from "@/assets/images";
 import type { StaticImageData } from "next/image";
 
-const FEATURE_ITEMS = [
+const PILLARS = [
   {
-    icon: Rabbit,
+    index: "01",
     title: "Le terroir agricole dans toute sa splendeur",
-    text: "L'alimentation naturelle est aujourd'hui au coeur de toutes les attentions.",
+    text: "L'alimentation naturelle est au coeur de toutes les attentions.",
+    quote: false,
   },
   {
-    icon: Apple,
+    index: "02",
     title: "Ferme Solime, mangez mieux chaque jour",
-    text: "La nutrition biologique s'impose comme un choix essentiel pour une vie saine.",
+    text: "La nutrition biologique pour une vie saine.",
+    quote: false,
   },
   {
-    icon: Carrot,
+    index: "03",
     title: "L'authenticite qui se savoure",
-    text: "Plus qu'un choix alimentaire, une nouvelle facon de vivre et de consommer.",
+    text: "Une nouvelle facon de vivre et de consommer.",
+    quote: true,
   },
 ] as const;
 
-const VISUAL_CARDS = [
-  {
-    src: tomateCardImage,
-    alt: "Culture maraichere",
-    className:
-      "left-2 top-10 w-36 sm:left-4 sm:w-44 lg:left-6 lg:top-8 lg:w-48",
-    rotate: -4,
-    delay: 0.1,
-  },
-  {
-    src: lapinCardImage,
-    alt: "Exploitation durable",
-    className:
-      "right-2 top-1 w-36 sm:right-3 sm:top-0 sm:w-44 lg:right-4 lg:top-0 lg:w-[11.5rem]",
-    rotate: 3,
-    delay: 0.2,
-  },
-  {
-    src: tomateCardImage,
-    alt: "Recolte naturelle",
-    className:
-      "bottom-2 right-4 w-36 sm:bottom-3 sm:right-5 sm:w-44 lg:bottom-4 lg:right-6 lg:w-[11.5rem]",
-    rotate: -2,
-    delay: 0.35,
-  },
+function OrganicBlob({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 400 360"
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M320 40C360 90 380 160 350 230C320 300 250 340 170 330C90 320 20 260 30 180C40 100 110 30 190 25C270 20 280 0 320 40Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function PathMarker({ index }: { index: string }) {
+  return (
+    <span className="relative z-10 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface-elevated text-[11px] font-black tracking-wider text-primary shadow-[0_0_0_6px_rgba(239,130,25,0.1),0_8px_20px_rgba(52,76,61,0.08)] ring-1 ring-primary/20">
+      {index}
+      <span className="absolute inset-0 rounded-full bg-primary/15 blur-md" aria-hidden="true" />
+    </span>
+  );
+}
+
+function PillarCopy({
+  pillar,
+  align,
+}: {
+  pillar: (typeof PILLARS)[number];
+  align: "left" | "right";
+}) {
+  const aligned = align === "right" ? "md:text-right" : "md:text-left";
+
+  if (pillar.quote) {
+    return (
+      <div className={`relative ${aligned}`}>
+        <span
+          className="pointer-events-none absolute -top-2 font-display text-4xl leading-none text-primary/35 md:text-5xl"
+          style={align === "right" ? { right: 0 } : { left: 0 }}
+          aria-hidden="true"
+        >
+          &ldquo;
+        </span>
+        <h3 className="relative pt-4 font-display text-lg font-bold leading-snug text-primary sm:text-xl">
+          {pillar.title}
+        </h3>
+        <p className="relative mt-2 text-sm leading-7 text-primary/80">{pillar.text}</p>
+        <span
+          className="pointer-events-none absolute -bottom-4 font-display text-4xl leading-none text-primary/35 md:text-5xl"
+          style={align === "right" ? { left: "1rem" } : { right: 0 }}
+          aria-hidden="true"
+        >
+          &rdquo;
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={aligned}>
+      <h3 className="font-display text-lg font-bold leading-snug text-primary sm:text-xl">
+        {pillar.title}
+      </h3>
+      <p className="mt-2 text-sm leading-7 text-primary/80">{pillar.text}</p>
+    </div>
+  );
+}
+
+function CurvedJourneyPath({ className }: { className?: string }) {
+  return (
+    <svg
+      className={`text-highlight/25 ${className ?? ""}`}
+      viewBox="0 0 900 500"
+      preserveAspectRatio="none"
+      fill="none"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M 110 65 C 210 35, 360 95, 490 155 C 620 215, 760 285, 710 355 C 660 415, 420 455, 185 475"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeDasharray="8 10"
+        strokeLinecap="round"
+        className="hidden md:block"
+      />
+      <path
+        d="M 28 30 C 28 110, 52 170, 28 230 C 28 290, 52 350, 28 430"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeDasharray="8 10"
+        strokeLinecap="round"
+        className="md:hidden"
+      />
+    </svg>
+  );
+}
+
+const JOURNEY_STOPS = [
+  { x: "12%", y: "13%", textSide: "left" as const },
+  { x: "79%", y: "71%", textSide: "right" as const },
+  { x: "21%", y: "92%", textSide: "left" as const },
 ] as const;
 
-type SlideItem = {
-  src: StaticImageData;
-  alt: string;
-  name: string;
-  category: string;
-};
+const MOBILE_STOPS = [{ y: "8%" }, { y: "46%" }, { y: "84%" }] as const;
 
-const SLIDES: SlideItem[] = [
-  {
-    src: pimentShowcaseImage,
-    alt: "piment rouge",
-    name: "Piment rouge du terroir",
-    category: "Epices",
-  },
-  {
-    src: oignonsImage,
-    alt: "oignons",
-    name: "Oignons frais de saison",
-    category: "Legumes",
-  },
-  {
-    src: haricotImage,
-    alt: "haricot",
-    name: "Haricots verts biologiques",
-    category: "Legumineuses",
-  },
-  {
-    src: maisGridImage,
-    alt: "mais",
-    name: "Mais dore du plateau",
-    category: "Cereales",
-  },
-  {
-    src: poivronsImage,
-    alt: "poivrons",
-    name: "Poivrons multicolores",
-    category: "Epices",
-  },
-  {
-    src: chouxImage,
-    alt: "choux",
-    name: "Chou frais de maraichage",
-    category: "Legumes",
-  },
-];
+function PillarsJourney() {
+  return (
+    <div className="relative mx-auto mt-12 max-w-5xl lg:mt-16">
+      <OrganicBlob className="pointer-events-none absolute -left-20 top-0 h-44 w-44 text-primary-light/80" />
+      <OrganicBlob className="pointer-events-none absolute -right-16 bottom-0 h-40 w-40 text-surface-alt" />
 
-function VerticalShowcase() {
+      <CurvedJourneyPath className="pointer-events-none absolute inset-0 h-full w-full" />
+
+      <ul className="relative min-h-[420px] md:hidden">
+        {PILLARS.map((pillar, index) => (
+          <motion.li
+            key={pillar.index}
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: "-30px" }}
+            transition={{ duration: 0.45, delay: index * 0.06 }}
+            className="absolute left-0 right-0 px-1"
+            style={{ top: MOBILE_STOPS[index].y }}
+          >
+            <div className="flex items-start gap-4 pl-0">
+              <PathMarker index={pillar.index} />
+              <div className="min-w-0 flex-1 pt-0.5">
+                <PillarCopy pillar={pillar} align="left" />
+              </div>
+            </div>
+          </motion.li>
+        ))}
+      </ul>
+
+      <div className="relative hidden min-h-[500px] md:block">
+        {PILLARS.map((pillar, index) => {
+          const stop = JOURNEY_STOPS[index];
+          const isTextRight = stop.textSide === "right";
+
+          return (
+            <motion.div
+              key={pillar.index}
+              initial={{ opacity: 0, y: 16 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, margin: "-30px" }}
+              transition={{ duration: 0.45, delay: index * 0.06 }}
+            >
+              <div
+                className="absolute z-10"
+                style={{
+                  left: stop.x,
+                  top: stop.y,
+                  transform: "translate(-50%, -50%)",
+                }}
+              >
+                <PathMarker index={pillar.index} />
+              </div>
+
+              <div
+                className="absolute max-w-[300px] lg:max-w-[340px]"
+                style={{
+                  left: stop.x,
+                  top: stop.y,
+                  transform: isTextRight
+                    ? "translate(36px, -50%)"
+                    : "translate(calc(-100% - 36px), -50%)",
+                }}
+              >
+                <PillarCopy pillar={pillar} align={isTextRight ? "left" : "right"} />
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      <motion.div
+        animate={{ y: [0, -5, 0] }}
+        transition={{ repeat: Infinity, duration: 4.5, ease: "easeInOut" }}
+        className="pointer-events-none absolute right-[8%] top-[38%] hidden text-primary/35 md:block"
+      >
+        <Leaf className="h-5 w-5" />
+      </motion.div>
+      <motion.div
+        animate={{ y: [0, 6, 0] }}
+        transition={{ repeat: Infinity, duration: 4, ease: "easeInOut", delay: 0.5 }}
+        className="pointer-events-none absolute left-[10%] top-[62%] hidden text-highlight/25 md:block"
+      >
+        <Leaf className="h-4 w-4" />
+      </motion.div>
+    </div>
+  );
+}
+
+function VerticalImageCarousel() {
   const trackRef = useRef<HTMLDivElement>(null);
-  const [isHovering, setIsHovering] = useState(false);
+  const [paused, setPaused] = useState(false);
   const animationRef = useRef<number | null>(null);
   const posRef = useRef(0);
 
-  const SLIDE_HEIGHT = 320;
-  const GAP = 20;
-  const speed = 0.6;
-  const totalHeight = (SLIDE_HEIGHT + GAP) * SLIDES.length;
-
-  const tick = () => {
-    if (!isHovering) {
-      posRef.current += speed;
-      if (posRef.current >= totalHeight) {
-        posRef.current -= totalHeight;
-      }
-      if (trackRef.current) {
-        trackRef.current.style.transform = `translateY(${posRef.current}px)`;
-      }
-    }
-    animationRef.current = requestAnimationFrame(tick);
-  };
+  const SLIDE_HEIGHT = 220;
+  const GAP = 16;
+  const speed = 0.45;
+  const slides: { src: StaticImageData; alt: string }[] = [
+    { src: pimentShowcaseImage, alt: "Piments du terroir" },
+    { src: tomateCardImage, alt: "Tomates fraiches" },
+    { src: oignonsImage, alt: "Oignons de saison" },
+    { src: haricotImage, alt: "Haricots verts" },
+    { src: poivronsImage, alt: "Poivrons" },
+    { src: maisGridImage, alt: "Mais dore" },
+    { src: chouxImage, alt: "Choux frais" },
+  ];
+  const totalHeight = (SLIDE_HEIGHT + GAP) * slides.length;
 
   useEffect(() => {
+    const tick = () => {
+      if (!paused && trackRef.current) {
+        posRef.current += speed;
+        if (posRef.current >= totalHeight) {
+          posRef.current -= totalHeight;
+        }
+        trackRef.current.style.transform = `translate3d(0, -${posRef.current}px, 0)`;
+      }
+      animationRef.current = requestAnimationFrame(tick);
+    };
+
     animationRef.current = requestAnimationFrame(tick);
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isHovering]);
+  }, [paused, totalHeight]);
 
-  const doubled = [...SLIDES, ...SLIDES];
+  const loopSlides = [...slides, ...slides];
 
   return (
     <div
-      className="overflow-hidden"
-      onMouseEnter={() => setIsHovering(true)}
-      onMouseLeave={() => setIsHovering(false)}
+      className="relative z-[1] h-[88%] w-[82%] overflow-hidden rounded-[2rem] bg-background/95 shadow-[0_20px_48px_rgba(52,76,61,0.1)] ring-1 ring-border-subtle backdrop-blur-[2px]"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      aria-label="Carrousel produits"
     >
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-12 bg-gradient-to-b from-background to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-12 bg-gradient-to-b from-transparent to-background" />
+
       <div
         ref={trackRef}
         className="flex flex-col will-change-transform"
-        style={{ gap: `${GAP}px` }}
+        style={{ gap: `${GAP}px`, padding: "8px" }}
       >
-        {doubled.map((s, i) => (
+        {loopSlides.map((slide, index) => (
           <div
-            key={i}
-            className="relative h-[320px] w-full shrink-0 overflow-hidden rounded-2xl shadow-md"
+            key={`${slide.alt}-${index}`}
+            className="relative shrink-0 overflow-hidden rounded-[1.35rem] bg-surface-elevated shadow-sm ring-1 ring-border-subtle"
+            style={{ height: `${SLIDE_HEIGHT}px` }}
           >
-            <Image src={s.src} alt={s.alt} fill className="object-cover" />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent" />
-            <div className="absolute bottom-0 left-0 right-0 p-4 text-white">
-              <p className="mb-1 text-[10px] uppercase tracking-widest opacity-70">
-                {s.category}
-              </p>
-              <p className="text-base font-medium leading-tight">{s.name}</p>
-            </div>
+            <Image
+              src={slide.src}
+              alt={slide.alt}
+              fill
+              sizes="(max-width: 768px) 85vw, 360px"
+              className="object-cover"
+            />
           </div>
         ))}
       </div>
@@ -174,198 +310,82 @@ function VerticalShowcase() {
   );
 }
 
+function ProductShowcase() {
+  return (
+    <div className="relative flex aspect-[4/5] w-full min-h-[400px] max-w-[520px] items-center justify-center overflow-visible sm:min-h-[460px] lg:max-w-[600px] lg:min-h-[540px]">
+      <OrganicBlob className="pointer-events-none absolute left-1/2 top-1/2 h-[155%] w-[155%] -translate-x-1/2 -translate-y-1/2 text-primary-light sm:h-[165%] sm:w-[165%] lg:h-[175%] lg:w-[175%]" />
+
+      <VerticalImageCarousel />
+
+      <motion.div
+        animate={{ y: [0, -8, 0], rotate: [0, 6, 0] }}
+        transition={{ repeat: Infinity, duration: 5, ease: "easeInOut" }}
+        className="pointer-events-none absolute right-[6%] top-[6%] z-20 text-highlight/30 lg:right-[2%]"
+      >
+        <Leaf className="h-9 w-9 lg:h-10 lg:w-10" />
+      </motion.div>
+      <motion.div
+        animate={{ y: [0, 10, 0], rotate: [0, -8, 0] }}
+        transition={{ repeat: Infinity, duration: 4.5, ease: "easeInOut", delay: 0.6 }}
+        className="pointer-events-none absolute bottom-[12%] left-[4%] z-20 text-primary/35 lg:left-0"
+      >
+        <Leaf className="h-7 w-7 lg:h-8 lg:w-8" />
+      </motion.div>
+    </div>
+  );
+}
+
 export default function AgriShowcaseSection() {
   return (
-    <section className="relative overflow-hidden bg-[#fbf7e8] py-14 sm:py-16 lg:py-24">
-      <div className="mx-auto max-w-[1800px] px-4 sm:px-6 md:px-8 lg:px-12 xl:px-16 2xl:px-20">
-        <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)] lg:gap-14">
+    <section className="relative overflow-x-clip overflow-y-visible bg-background py-12 sm:py-14 lg:py-16">
+      <OrganicBlob className="pointer-events-none absolute -left-24 top-0 h-64 w-64 text-primary-light/50" />
+      <OrganicBlob className="pointer-events-none absolute -right-20 bottom-0 h-56 w-56 text-surface-alt/80" />
+
+      <div className="relative mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <div className="grid items-center gap-10 overflow-visible lg:grid-cols-2 lg:gap-14">
           <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: "-80px" }}
-            transition={{ duration: 0.55, ease: "easeOut" }}
-            className="space-y-8"
+            initial={{ opacity: 0, x: -20 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true, margin: "-60px" }}
+            transition={{ duration: 0.5 }}
+            className="mx-auto max-w-xl space-y-5 lg:mx-0"
           >
-            <div className="max-w-3xl space-y-4">
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-primary">
-                Notre promesse
-              </p>
-              <h2 className="text-3xl font-bold leading-tight text-gray-900 sm:text-4xl">
-                Le terroir agricole dans toute sa splendeur
-              </h2>
-              <p className="max-w-3xl text-base leading-relaxed text-muted sm:text-lg">
-                L&apos;alimentation naturelle est aujourd&apos;hui au coeur de toutes les
-                attentions.
-              </p>
+            <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-elevated px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-highlight shadow-sm">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              Notre promesse
             </div>
 
-            <div className="space-y-6">
-              {FEATURE_ITEMS.map((item, index) => {
-                const Icon = item.icon;
-                return (
-                  <motion.div
-                    key={item.title}
-                    initial={{ opacity: 0, x: -24 }}
-                    whileInView={{ opacity: 1, x: 0 }}
-                    viewport={{ once: true, margin: "-80px" }}
-                    transition={{
-                      duration: 0.45,
-                      delay: 0.08 * index,
-                      ease: "easeOut",
-                    }}
-                    className="flex items-start gap-4 sm:gap-5"
-                  >
-                    <div
-                      className={`mt-1 flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border shadow-sm ${
-                        item.title.includes("authenticit")
-                          ? "border-primary/20 bg-primary/10"
-                          : "border-info/20 bg-info/10"
-                      }`}
-                    >
-                      <Icon
-                        className={`h-6 w-6 ${
-                          item.title.includes("authenticit") ? "text-primary" : "text-info"
-                        }`}
-                        strokeWidth={1.9}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <h3 className="font-sans text-xl font-semibold leading-tight text-foreground sm:text-2xl">
-                        {item.title}
-                      </h3>
-                      <p className="max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
-                        {item.text}
-                      </p>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
+            <h2 className="font-display text-3xl font-black leading-[1.08] tracking-tight text-foreground sm:text-4xl">
+              Le terroir agricole
+              <span className="block text-highlight">dans toute sa splendeur</span>
+            </h2>
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-80px" }}
-              transition={{ duration: 0.5, delay: 0.18, ease: "easeOut" }}
-              className="relative max-w-[42rem] overflow-hidden rounded-3xl shadow-2xl"
+            <p className="text-sm leading-7 text-muted sm:text-base">
+              L&apos;alimentation naturelle est aujourd&apos;hui au coeur de toutes les attentions.
+              Atelier du Terroir et Ferme Solime vous rapprochent du meilleur de la production locale.
+            </p>
+
+            <Link
+              href="/products"
+              className="inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-bold text-white shadow-[0_10px_24px_rgba(239,130,25,0.3)] transition hover:bg-primary-active"
             >
-              <div className="relative aspect-[16/9] w-full">
-                <Image
-                  src={lapinHeroImage}
-                  alt="Lapin et recolte"
-                  fill
-                  className="object-cover"
-                  priority
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
-
-                <div className="absolute inset-x-0 bottom-0 p-5 sm:p-6 md:p-8">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Heart className="h-4 w-4 fill-rose-500 text-rose-500" />
-                      <span className="text-xs font-semibold uppercase tracking-wider text-white/80">
-                        Coup de coeur
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-1 backdrop-blur-sm">
-                      <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                      <span className="text-xs font-bold text-white">4.8 ★</span>
-                    </div>
-                  </div>
-
-                  <h3 className="mt-3 text-3xl font-bold text-white sm:text-4xl md:text-5xl">
-                    Nature pure
-                  </h3>
-
-                  <div className="mt-2 flex items-baseline gap-2">
-                    <span className="text-xl font-semibold text-amber-300">Frais local</span>
-                    <span className="text-sm text-white/60 line-through">Produit standard</span>
-                    <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-bold text-amber-200">
-                      -15%
-                    </span>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap items-center gap-4 sm:gap-6">
-                    <div>
-                      <p className="text-2xl font-bold text-white">98K+</p>
-                      <p className="text-xs text-white/70">Clients satisfaits</p>
-                    </div>
-                    <div className="h-8 w-px bg-white/30" />
-                    <div>
-                      <p className="text-2xl font-bold text-white">4.6 ★</p>
-                      <p className="text-xs text-white/70">Avis positifs</p>
-                    </div>
-                    <div className="h-8 w-px bg-white/30" />
-                    <div>
-                      <p className="text-2xl font-bold text-white">24/7</p>
-                      <p className="text-xs text-white/70">Support local</p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="mt-5 inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-gray-900 shadow-lg transition hover:bg-amber-50"
-                  >
-                    Decouvrir
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                </div>
-
-                <div className="absolute left-3 top-3 rounded-full bg-black/50 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
-                  Elevage bio
-                </div>
-                <div className="absolute right-3 top-3 rounded-full bg-amber-400 px-2 py-0.5 text-xs font-bold text-gray-900 shadow-md">
-                  Limite
-                </div>
-              </div>
-            </motion.div>
+              Decouvrir la boutique
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </motion.div>
 
           <motion.div
-            initial={{ opacity: 0, y: 28 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: "-80px" }}
-            transition={{ duration: 0.6, ease: "easeOut", delay: 0.1 }}
-            className="relative mx-auto w-full max-w-[680px]"
+            initial={{ opacity: 0, x: 20 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true, margin: "-60px" }}
+            transition={{ duration: 0.5, delay: 0.08 }}
+            className="mx-auto flex w-full max-w-[520px] justify-center overflow-visible lg:max-w-[620px] lg:justify-end"
           >
-            <div className="relative min-h-[540px] sm:min-h-[600px] lg:min-h-[700px]">
-              {VISUAL_CARDS.map((card) => (
-                <motion.div
-                  key={card.alt}
-                  initial={{ opacity: 0, y: 24, rotate: card.rotate }}
-                  whileInView={{ opacity: 1, y: 0, rotate: card.rotate }}
-                  whileHover={{
-                    y: -6,
-                    rotate: card.rotate + 1,
-                    transition: { duration: 0.25 },
-                  }}
-                  viewport={{ once: true, margin: "-80px" }}
-                  transition={{
-                    duration: 0.55,
-                    delay: card.delay,
-                    ease: "easeOut",
-                  }}
-                  className={`absolute overflow-hidden rounded-3xl bg-white shadow-[0_18px_50px_rgba(17,24,39,0.12)] ${card.className}`}
-                >
-                  <div className="relative aspect-[4/3]">
-                    <Image src={card.src} alt={card.alt} fill className="object-cover" />
-                  </div>
-                </motion.div>
-              ))}
-
-              <motion.div
-                initial={{ opacity: 0, scale: 0.94, y: 24 }}
-                whileInView={{ opacity: 1, scale: 1, y: 0 }}
-                whileHover={{ y: -8 }}
-                viewport={{ once: true, margin: "-80px" }}
-                transition={{ duration: 0.6, delay: 0.25, ease: "easeOut" }}
-                className="absolute left-1/2 top-1/2 w-[92%] max-w-[460px] -translate-x-1/2 -translate-y-1/2"
-              >
-                <VerticalShowcase />
-              </motion.div>
-            </div>
+            <ProductShowcase />
           </motion.div>
         </div>
+
+        <PillarsJourney />
       </div>
     </section>
   );

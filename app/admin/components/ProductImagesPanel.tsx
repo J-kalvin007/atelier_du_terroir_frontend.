@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import { Loader2, Star, Trash2 } from "lucide-react";
+import { useConfirmDialog } from "@/components/admin/useConfirmDialog";
 import {
   deleteAdminProductImage,
   patchAdminProductImage,
   type AdminProductImage,
 } from "@/lib/ecommerce-api";
-import { cn, readApiError } from "@/lib/utils";
+import { cn, readApiError, resolveMediaUrl } from "@/lib/utils";
 
 interface ProductImagesPanelProps {
   productId: string;
@@ -27,6 +27,7 @@ export default function ProductImagesPanel({
   onNotice,
   onError,
 }: ProductImagesPanelProps) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { alt_text: string; is_active: boolean }>>(
@@ -112,12 +113,21 @@ export default function ProductImagesPanel({
   };
 
   const handleDelete = async (id: string) => {
+    const confirmed = await confirm({
+      title: "Supprimer l'image",
+      description:
+        "Supprimer définitivement cette image ? Elle sera retirée du produit et de la bibliothèque.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     setDeletingId(id);
 
     try {
       await deleteAdminProductImage(token, id);
       removeImage(id);
-      onNotice?.("Image supprimée.");
+      onNotice?.("Image supprimée définitivement.");
     } catch (error) {
       console.error("Error deleting product image:", error);
       onError?.(readApiError(error, "Impossible de supprimer l'image."));
@@ -128,15 +138,19 @@ export default function ProductImagesPanel({
 
   if (images.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
-        Aucune image enregistrée pour ce produit. Téléversez une image ou liez-en une depuis la
-        bibliothèque.
-      </div>
+      <>
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
+          Aucune image enregistrée pour ce produit. Téléversez une image ou liez-en une depuis la
+          bibliothèque.
+        </div>
+        {confirmDialog}
+      </>
     );
   }
 
   return (
-    <div className="space-y-3">
+    <>
+      <div className="space-y-3">
       {images.map((image, index) => {
         const draft = getDraft(image);
         const isBusy = savingId === image.id;
@@ -150,13 +164,12 @@ export default function ProductImagesPanel({
             )}
           >
             <div className="flex gap-3">
-              <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-slate-50">
-                <Image
-                  src={image.image}
+              <div className="relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-50">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={resolveMediaUrl(image.image) || image.image}
                   alt={draft.alt_text || `Image ${index + 1}`}
-                  fill
-                  className="object-contain p-1"
-                  sizes="80px"
+                  className="max-h-full max-w-full object-contain p-1"
                 />
               </div>
 
@@ -215,13 +228,15 @@ export default function ProductImagesPanel({
                       type="button"
                       disabled={deletingId === image.id}
                       onClick={() => void handleDelete(image.id)}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
+                      className="flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-semibold text-red-500 hover:bg-red-50 disabled:opacity-50"
+                      title="Supprimer définitivement"
                     >
                       {deletingId === image.id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Trash2 className="h-3.5 w-3.5" />
                       )}
+                      Supprimer
                     </button>
                   </div>
                 </div>
@@ -230,6 +245,8 @@ export default function ProductImagesPanel({
           </div>
         );
       })}
-    </div>
+      </div>
+      {confirmDialog}
+    </>
   );
 }

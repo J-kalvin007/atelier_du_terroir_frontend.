@@ -12,7 +12,8 @@ import {
   ShoppingBag,
   Star,
 } from "lucide-react";
-import { getProductBySlug, type PublicProductDetail } from "@/lib/ecommerce-api";
+import { getActiveFlashSales, getProductBySlug, type PublicProductDetail } from "@/lib/ecommerce-api";
+import { findFlashSaleForSlug } from "@/lib/promotions";
 import { formatCurrency } from "@/lib/utils";
 import { useCartStore } from "@/store/cartStore";
 import { LegacyHeader } from "@/components/home/LegacyHeader";
@@ -24,6 +25,8 @@ type Props = {
 
 export default function ProductDetailClient({ slug }: Props) {
   const [product, setProduct] = useState<PublicProductDetail | null>(null);
+  const [flashSalePrice, setFlashSalePrice] = useState<string | null>(null);
+  const [flashSaleOriginal, setFlashSaleOriginal] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState(0);
@@ -37,11 +40,23 @@ export default function ProductDetailClient({ slug }: Props) {
     void (async () => {
       try {
         setLoading(true);
-        const data = await getProductBySlug(slug);
+        const [data, flashSales] = await Promise.all([
+          getProductBySlug(slug),
+          getActiveFlashSales().catch(() => []),
+        ]);
         if (!active) return;
         setProduct(data);
         setSelectedImage(0);
         setError(null);
+
+        const flashSale = findFlashSaleForSlug(flashSales, slug);
+        if (flashSale && Number(flashSale.sale_price) < Number(flashSale.original_price || data.price)) {
+          setFlashSalePrice(flashSale.sale_price);
+          setFlashSaleOriginal(flashSale.original_price || data.price);
+        } else {
+          setFlashSalePrice(null);
+          setFlashSaleOriginal(null);
+        }
       } catch {
         if (!active) return;
         setProduct(null);
@@ -67,7 +82,10 @@ export default function ProductDetailClient({ slug }: Props) {
   const categoryName =
     product && typeof product.category === "object" ? product.category?.name : "Catalogue";
 
-  const hasDiscount = false;
+  const displayPrice = flashSalePrice ?? product?.price ?? "0";
+  const comparePrice = flashSaleOriginal;
+  const hasDiscount =
+    Boolean(comparePrice) && Number(comparePrice) > Number(displayPrice);
   const isOutOfStock = product?.is_in_stock === "OUT_OF_STOCK";
 
   function handleAddToCart() {
@@ -78,8 +96,8 @@ export default function ProductDetailClient({ slug }: Props) {
       variantId: null,
       name: product.name,
       sku: product.sku,
-      price: product.price,
-      compareAtPrice: null,
+      price: displayPrice,
+      compareAtPrice: comparePrice,
       image: images[0] ?? null,
       quantity,
       maxStock: Math.max(product.stock ?? 1, 1),
@@ -184,19 +202,32 @@ export default function ProductDetailClient({ slug }: Props) {
 
                 <div className="flex items-baseline gap-3">
                   <span className="text-3xl font-bold text-[#1f4d3f]">
-                    {formatCurrency(product.price, "FCFA")}
+                    {formatCurrency(displayPrice, "FCFA")}
                   </span>
-                  {hasDiscount ? (
-                    <span className="text-lg text-[#8a9086] line-through">—</span>
+                  {hasDiscount && comparePrice ? (
+                    <span className="text-lg text-[#8a9086] line-through">
+                      {formatCurrency(comparePrice, "FCFA")}
+                    </span>
+                  ) : null}
+                  {flashSalePrice ? (
+                    <span className="rounded-full bg-[#ef8219]/10 px-3 py-1 text-sm font-semibold text-[#ef8219]">
+                      Vente flash
+                    </span>
                   ) : null}
                 </div>
 
                 <p className="leading-8 text-[#586657]">{product.description || "Aucune description."}</p>
 
-                <div className="rounded-2xl border border-[#e7d7c1] bg-white/80 p-4 text-sm text-[#5d6b58]">
-                  <p>SKU: {product.sku}</p>
-                  <p>Stock: {product.stock ?? 0}</p>
-                  <p>Statut: {product.is_in_stock ?? "IN_STOCK"}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ${
+                      isOutOfStock
+                        ? "bg-red-50 text-red-600"
+                        : "bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    {isOutOfStock ? "Indisponible" : "Disponible"}
+                  </span>
                 </div>
 
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -225,7 +256,7 @@ export default function ProductDetailClient({ slug }: Props) {
                     className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-[#8b5e34] px-6 py-3.5 text-sm font-semibold text-white transition hover:bg-[#744b27] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isAdded ? <Check className="h-5 w-5" /> : <ShoppingBag className="h-5 w-5" />}
-                    {isOutOfStock ? "Rupture de stock" : isAdded ? "Ajoute au panier" : "Ajouter au panier"}
+                    {isOutOfStock ? "Indisponible" : isAdded ? "Ajoute au panier" : "Ajouter au panier"}
                   </button>
                 </div>
               </motion.div>

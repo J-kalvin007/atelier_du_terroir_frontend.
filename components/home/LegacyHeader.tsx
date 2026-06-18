@@ -53,6 +53,7 @@ export function LegacyHeader() {
   const [isScrolled, setIsScrolled] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
+  const hasHydrated = useCartStore((state) => state.hasHydrated);
   const cartCount = useCartStore((state) => state.getItemCount());
   const toggleDrawer = useCartStore((state) => state.toggleDrawer);
 
@@ -252,7 +253,7 @@ export function LegacyHeader() {
               aria-label="Ouvrir le panier"
             >
               <ShoppingBag className="h-4 w-4" />
-              {cartCount > 0 ? (
+              {hasHydrated && cartCount > 0 ? (
                 <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#ef8219] px-1 text-[10px] font-bold text-white">
                   {cartCount}
                 </span>

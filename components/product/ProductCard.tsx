@@ -106,7 +106,13 @@ export function ProductCard({ product, index = 0 }: ProductCardProps) {
                 Bio
               </span>
             ) : null}
-            {isOutOfStock ? <span className="badge-out shadow-md">Epuise</span> : null}
+            {isOutOfStock ? (
+              <span className="badge-out shadow-md">Indisponible</span>
+            ) : (
+              <span className="rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-semibold text-white shadow-md">
+                Disponible
+              </span>
+            )}
           </div>
 
           <button

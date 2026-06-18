@@ -11,9 +11,12 @@ import {
   formatOrderStatus,
   getOrderByReference,
   getOrders,
+  type OrderDetail,
   type OrderSummary,
 } from "@/lib/ecommerce-api";
 import { formatCurrency, readApiError } from "@/lib/utils";
+import { OrderDetailLoadingPanel, OrderDetailPanel } from "@/components/orders/OrderDetailPanel";
+import { resolveOrderDiscount } from "@/lib/promotions";
 
 function mergeOrders(primary: OrderSummary[], secondary: OrderSummary[]) {
   const merged = new Map<string, OrderSummary>();
@@ -35,6 +38,9 @@ export default function OrdersPageContent() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [detailReference, setDetailReference] = useState<string | null>(reference);
+  const [detailOrder, setDetailOrder] = useState<OrderDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const loadOrders = useCallback(async () => {
     if (!session?.token) {
@@ -84,6 +90,46 @@ export default function OrdersPageContent() {
     void loadOrders();
   }, [loadOrders]);
 
+  useEffect(() => {
+    if (!session?.token || !detailReference) {
+      setDetailOrder(null);
+      return;
+    }
+
+    let active = true;
+    setDetailLoading(true);
+
+    void (async () => {
+      try {
+        const order = await getOrderByReference(session.token!, detailReference);
+        if (active) {
+          setDetailOrder(order);
+        }
+      } catch {
+        if (active) {
+          setDetailOrder(null);
+        }
+      } finally {
+        if (active) {
+          setDetailLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [detailReference, session?.token]);
+
+  function openOrderDetail(orderReference: string) {
+    setDetailReference(orderReference);
+  }
+
+  function closeOrderDetail() {
+    setDetailReference(null);
+    setDetailOrder(null);
+  }
+
   return (
     <ClientAccountShell>
       <div className="mx-auto max-w-5xl px-4 py-12 sm:px-6">
@@ -113,27 +159,44 @@ export default function OrdersPageContent() {
           <EmptyBlock message="Aucune commande pour le moment." />
         ) : (
           <div className="space-y-4">
-            {orders.map((order) => (
-              <div
-                key={order.reference}
-                className="rounded-2xl border border-[#eadcca] bg-white p-5 shadow-sm"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="font-mono text-sm font-semibold text-[#1f241c]">{order.reference}</p>
-                    <p className="mt-1 text-xs text-[#5c6a59]">{formatOrderDate(order.created_at)}</p>
+            {orders.map((order) => {
+              const discount = resolveOrderDiscount(order);
+
+              return (
+                <button
+                  key={order.reference}
+                  type="button"
+                  onClick={() => openOrderDetail(order.reference)}
+                  className="w-full rounded-2xl border border-[#eadcca] bg-white p-5 text-left shadow-sm transition hover:border-[#ef8219]/40 hover:shadow-md"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-sm font-semibold text-[#1f241c]">{order.reference}</p>
+                      <p className="mt-1 text-xs text-[#5c6a59]">{formatOrderDate(order.created_at)}</p>
+                    </div>
+                    <span className="rounded-full bg-[#eef6ea] px-3 py-1 text-xs font-semibold text-[#1f4d3f]">
+                      {formatOrderStatus(order.status)}
+                    </span>
+                    <p className="text-sm font-bold text-[#ef8219]">
+                      {formatCurrency(parseFloat(order.total_final || order.items_total), "FCFA")}
+                      {discount > 0 ? (
+                        <span className="ml-2 text-xs font-medium text-emerald-700">
+                          (reduction appliquee)
+                        </span>
+                      ) : null}
+                    </p>
                   </div>
-                  <span className="rounded-full bg-[#eef6ea] px-3 py-1 text-xs font-semibold text-[#1f4d3f]">
-                    {formatOrderStatus(order.status)}
-                  </span>
-                  <p className="text-sm font-bold text-[#ef8219]">
-                    {formatCurrency(parseFloat(order.total_final || order.items_total), "FCFA")}
-                  </p>
-                </div>
-              </div>
-            ))}
+                  <p className="mt-3 text-xs font-semibold text-[#8b5e34]">Voir le detail</p>
+                </button>
+              );
+            })}
           </div>
         )}
+
+        {detailLoading ? <OrderDetailLoadingPanel onClose={closeOrderDetail} /> : null}
+        {detailOrder && !detailLoading ? (
+          <OrderDetailPanel order={detailOrder} onClose={closeOrderDetail} variant="client" />
+        ) : null}
       </div>
     </ClientAccountShell>
   );

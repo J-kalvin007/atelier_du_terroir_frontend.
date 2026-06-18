@@ -15,6 +15,7 @@ import {
   CheckCircle,
 } from "lucide-react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
+import { useConfirmDialog } from "@/components/admin/useConfirmDialog";
 import {
   adminWithdrawFunds,
   getAdminAllTransactions,
@@ -27,6 +28,7 @@ import { formatCurrency, readApiError } from "@/lib/utils";
 
 export default function WalletSection() {
   const session = useAuthSession();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [tab, setTab] = useState<"wallets" | "transactions" | "withdraw">("wallets");
   const [wallets, setWallets] = useState<AdminWallet[]>([]);
   const [transactions, setTransactions] = useState<AdminTransaction[]>([]);
@@ -72,7 +74,14 @@ export default function WalletSection() {
     // Check if solde is 0 before closing/blocking as per rules if needed
     const balanceNum = parseFloat(currentBalance);
     if (newStatus !== "active" && balanceNum > 0) {
-      if (!confirm("Attention: Le solde du wallet est superieur a 0. Es-tu sur de vouloir suspendre/bloquer ce compte ?")) {
+      const confirmed = await confirm({
+        title: "Suspendre ou bloquer le compte",
+        description:
+          "Le solde du wallet est supérieur à 0. Êtes-vous sûr de vouloir suspendre ou bloquer ce compte ?",
+        confirmLabel: "Continuer",
+        variant: "default",
+      });
+      if (!confirmed) {
         return;
       }
     }
@@ -436,6 +445,7 @@ export default function WalletSection() {
           </form>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

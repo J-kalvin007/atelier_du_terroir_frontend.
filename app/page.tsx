@@ -3,6 +3,7 @@ import AgriShowcaseSection from "@/components/home/AgriShowcaseSection";
 import FermeSolimeSection from "@/components/home/FermeSolimeSection";
 import FeaturesSection from "@/components/home/FeaturesSection";
 import HeroSection from "@/components/home/HeroSection";
+import HomePromotionsSection from "@/components/home/HomePromotionsSection";
 import HomeTrendingProducts from "@/components/home/HomeTrendingProducts";
 import { LegacyFooter } from "@/components/home/LegacyFooter";
 import { LegacyHeader } from "@/components/home/LegacyHeader";
@@ -22,6 +23,7 @@ export default function HomePage() {
       <main className="page-transition bg-[#fbf7e8] text-[#1f241c]">
         <HeroSection />
         <TrustBand />
+        <HomePromotionsSection />
         <AgriShowcaseSection />
         <HomeTrendingProducts />
         <FermeSolimeSection />

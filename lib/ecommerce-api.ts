@@ -1,3 +1,4 @@
+import { mergeOrderWithPromoMeta } from "@/lib/order-promo-meta";
 import { parseApiErrorPayload, parseDjangoHtmlError, resolveMediaUrl, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
 
 export type PublicCategory = {
@@ -45,6 +46,13 @@ export type ProductListItem = {
   labels?: string[];
 };
 
+export type PublicPromoProduct = {
+  id: string;
+  name: string;
+  slug: string;
+  image?: string | null;
+};
+
 export type PublicPromoCode = {
   id: string;
   code: string;
@@ -54,6 +62,7 @@ export type PublicPromoCode = {
   value: string;
   starts_at?: string;
   expires_at?: string | null;
+  applicable_product_labels?: PublicPromoProduct[];
 };
 
 export type PublicBanner = {
@@ -69,6 +78,7 @@ export type PublicBanner = {
 
 export type PublicFlashSale = {
   id: string;
+  product_id?: string;
   product_name: string;
   product_slug: string;
   product_image: string;
@@ -90,6 +100,18 @@ export type AdminPromoCode = {
   starts_at?: string;
   expires_at?: string | null;
   restricted_to_tiers?: string[];
+  restricted_to_users?: number[];
+  applicable_products?: string[];
+  applicable_product_labels?: Array<{
+    id: string;
+    name: string;
+    sku?: string;
+  }>;
+  restricted_user_labels?: Array<{
+    id: number;
+    email: string;
+    name: string;
+  }>;
 };
 
 export type AdminCategory = {
@@ -922,6 +944,31 @@ export async function getProducts(filters?: ProductFilters) {
   };
 }
 
+function getProductDemandScore(product: ProductListItem) {
+  return (
+    (product.count_favorites ?? 0) * 3 +
+    (product.count_ratings ?? 0) * 2 +
+    Number(product.avg_rating ?? product.note_produit ?? 0) * 10
+  );
+}
+
+export async function getTrendingProducts(limit = 4) {
+  const topResponse = await getProducts({ is_top: true, page_size: limit });
+  const topProducts = topResponse.results;
+  const seenIds = new Set(topProducts.map((product) => product.id));
+
+  if (topProducts.length >= limit) {
+    return topProducts.slice(0, limit);
+  }
+
+  const catalogResponse = await getProducts({ page_size: Math.max(limit * 5, 20) });
+  const fallbackProducts = catalogResponse.results
+    .filter((product) => !seenIds.has(product.id))
+    .sort((left, right) => getProductDemandScore(right) - getProductDemandScore(left));
+
+  return [...topProducts, ...fallbackProducts].slice(0, limit);
+}
+
 export async function searchProducts(query: string, page = 1) {
   return getProducts({ search: query, page, page_size: 100 });
 }
@@ -934,7 +981,13 @@ export async function getActivePromoCodes() {
   const payload = await fetchJson<PublicPromoCode[] | Paginated<PublicPromoCode>>(
     "/api/v1/promotions/codes-promo-actifs/"
   );
-  return extractCollection<PublicPromoCode>(payload);
+  return extractCollection<PublicPromoCode>(payload).map((promo) => ({
+    ...promo,
+    applicable_product_labels: promo.applicable_product_labels?.map((product) => ({
+      ...product,
+      image: toAbsoluteUrl(product.image) ?? null,
+    })),
+  }));
 }
 
 export async function getActiveBanners(type?: string) {
@@ -958,6 +1011,11 @@ export async function getActiveFlashSales() {
   }));
 }
 
+/** Produits en promotion = ventes flash actives configurees dans l'admin. */
+export async function getPromoProducts() {
+  return getActiveFlashSales();
+}
+
 export async function getAdminPromoCodes(token: string) {
   const payload = await fetchJson<AdminPromoCode[] | Paginated<AdminPromoCode>>(
     "/api/v1/promotions/admin/codes-promo/",
@@ -978,6 +1036,7 @@ export type AdminPromoCodePayload = {
   applicable_products?: string[];
   applicable_categories?: string[];
   restricted_to_tiers?: string[];
+  restricted_to_users?: number[];
 };
 
 export async function createAdminPromoCode(token: string, payload: AdminPromoCodePayload) {
@@ -987,6 +1046,7 @@ export async function createAdminPromoCode(token: string, payload: AdminPromoCod
       applicable_products: [],
       applicable_categories: [],
       restricted_to_tiers: [],
+      restricted_to_users: [],
       ...payload,
     }),
     headers: authHeaders(token),
@@ -1117,6 +1177,7 @@ export async function updateAdminPromoCode(
       applicable_products: [],
       applicable_categories: [],
       restricted_to_tiers: [],
+      restricted_to_users: [],
       ...payload,
     }),
     headers: authHeaders(token),
@@ -1720,6 +1781,11 @@ export type OrderSummary = {
   items_total: string;
   frais_livraison: string;
   total_final: string;
+  discount_amount?: string;
+  promo_code?: string | null;
+  promo_type?: string | null;
+  promo_value?: string | null;
+  notes?: string | null;
   created_at: string;
 };
 
@@ -1733,6 +1799,7 @@ export type OrderDetail = OrderSummary & {
   notes: string;
   paid_at: string | null;
   updated_at: string;
+  promo_code?: string | null;
   items: Array<{
     id: string;
     product: string;
@@ -1783,6 +1850,63 @@ export function formatOrderDate(value: string) {
   });
 }
 
+function readOrderAmount(value: unknown): number {
+  if (value == null || value === "") {
+    return 0;
+  }
+
+  const parsed = parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function resolveOrderDiscountAmount(order: Record<string, unknown>): number {
+  const explicit = readOrderAmount(
+    order.discount_amount ?? order.montant_reduction ?? order.reduction_amount
+  );
+  if (explicit > 0) {
+    return explicit;
+  }
+
+  const itemsTotal = readOrderAmount(order.items_total);
+  const shipping = readOrderAmount(order.frais_livraison);
+  const tax = readOrderAmount(order.tax_amount);
+  const totalFinal = readOrderAmount(order.total_final);
+  const computed = itemsTotal + shipping + tax - totalFinal;
+
+  if (computed > 0.01) {
+    return Math.round(computed * 100) / 100;
+  }
+
+  const promoType = String(order.promo_type ?? order.promotion_type ?? "");
+  const promoValue = readOrderAmount(order.promo_value ?? order.promotion_value);
+  if (promoType === "percentage" && promoValue > 0 && itemsTotal > 0) {
+    return Math.round(itemsTotal * promoValue) / 100;
+  }
+  if (promoType === "fixed_amount" && promoValue > 0) {
+    return Math.min(promoValue, itemsTotal);
+  }
+
+  return 0;
+}
+
+function normalizeOrderRecord<T extends Record<string, unknown>>(order: T): T & OrderDetail {
+  const discount = resolveOrderDiscountAmount(order);
+
+  const normalized = {
+    ...order,
+    discount_amount: String(discount),
+    promo_type: (order.promo_type ?? order.promotion_type ?? null) as string | null,
+    promo_value: (order.promo_value ?? order.promotion_value ?? null) as string | null,
+    promo_code: (order.promo_code ??
+      order.code_promo ??
+      order.coupon_code ??
+      order.applied_promo_code ??
+      null) as string | null,
+  } as T & OrderDetail;
+
+  return mergeOrderWithPromoMeta(normalized);
+}
+
 export async function getOrders(token: string, filters?: OrderFilters) {
   const query = buildQueryString(filters);
   const endpoint = query
@@ -1793,13 +1917,16 @@ export async function getOrders(token: string, filters?: OrderFilters) {
     headers: authHeaders(token),
   });
 
-  return extractCollection<OrderSummary>(payload);
+  return extractCollection<OrderSummary>(payload).map((order) =>
+    normalizeOrderRecord(order as Record<string, unknown>)
+  );
 }
 
 export async function getOrderByReference(token: string, reference: string) {
-  return fetchJson<OrderDetail>(`/api/v1/commandes/mes-commandes/${reference}/`, {
+  const order = await fetchJson<OrderDetail>(`/api/v1/commandes/mes-commandes/${reference}/`, {
     headers: authHeaders(token),
   });
+  return normalizeOrderRecord(order as Record<string, unknown>);
 }
 
 export async function cancelOrder(token: string, reference: string) {
@@ -1832,14 +1959,17 @@ export async function getAdminOrders(token: string, filters?: OrderFilters) {
     `/api/v1/commandes/admin/all-commandes/${query}`,
     { headers: authHeaders(token) }
   );
-  return extractCollection<OrderSummary>(payload);
+  return extractCollection<OrderSummary>(payload).map((order) =>
+    normalizeOrderRecord(order as Record<string, unknown>)
+  );
 }
 
 export async function getAdminOrderByReference(token: string, reference: string) {
-  return fetchJson<OrderDetail>(
+  const order = await fetchJson<OrderDetail>(
     `/api/v1/commandes/admin/commandes/${reference}/`,
     { headers: authHeaders(token) }
   );
+  return normalizeOrderRecord(order as Record<string, unknown>);
 }
 
 export async function updateAdminOrderStatus(
@@ -1864,6 +1994,13 @@ export type CheckoutPayload = {
   city: string;
   country: string;
   notes?: string;
+  promo_code?: string | null;
+  promo_discount?: number;
+  promo_type?: string | null;
+  promo_value?: string | null;
+  promo_label?: string | null;
+  free_shipping?: boolean;
+  shipping_fee?: number;
   items: Array<{ product_id: string; quantity: number; variant_id?: string | null }>;
 };
 
@@ -1908,6 +2045,12 @@ export async function checkoutOrder(token: string, payload: CheckoutPayload) {
     throw new Error("Aucun article valide dans le panier.");
   }
 
+  const promoCode = payload.promo_code?.trim().toUpperCase() ?? "";
+  const promoDiscount = payload.promo_discount ?? 0;
+  const freeShipping = Boolean(payload.free_shipping);
+  const shippingFee = payload.shipping_fee ?? 0;
+  const productDiscount = freeShipping ? 0 : promoDiscount;
+
   return fetchMutation<CheckoutResponse>(
     "/api/v1/commandes/validate-commandes/",
     {
@@ -1918,6 +2061,18 @@ export async function checkoutOrder(token: string, payload: CheckoutPayload) {
         city: payload.city.trim().slice(0, 100),
         country: payload.country.trim().slice(0, 100),
         notes: payload.notes?.trim() || "",
+        shipping_fee: shippingFee > 0 ? shippingFee.toFixed(2) : undefined,
+        free_shipping: freeShipping || undefined,
+        promo_type: payload.promo_type ?? undefined,
+        ...(promoCode
+          ? {
+              promo_code: promoCode,
+              code_promo: promoCode,
+              code: promoCode,
+              discount_amount:
+                productDiscount > 0 ? productDiscount.toFixed(2) : undefined,
+            }
+          : {}),
         items: sanitizedItems,
       }),
       headers: authHeaders(token),
@@ -1958,20 +2113,45 @@ export async function getWalletTransactions(token: string) {
 }
 
 export type ValidatePromoResponse = {
-  valid: boolean;
+  valid?: boolean;
+  is_valid?: boolean;
   code?: string;
   type?: string;
   value?: string;
   discount_amount?: string;
+  montant_reduction?: string;
+  reduction_amount?: string;
+  reduction?: string;
+  discount?: string;
+  free_shipping?: boolean;
+  shipping_waiver?: string;
   description?: string;
   error_code?: string;
   detail?: string;
 };
 
-export async function validatePromoCode(token: string, code: string, cartTotal: string) {
+export type ValidatePromoCartItem = {
+  product_id: string;
+  quantity: number;
+  price: string;
+  category_id?: string | null;
+};
+
+export async function validatePromoCode(
+  token: string,
+  code: string,
+  cartTotal: string,
+  cartItems?: ValidatePromoCartItem[],
+  shippingFee?: string
+) {
   return fetchMutation<ValidatePromoResponse>("/api/v1/promotions/codes-promo/validate/", {
     method: "POST",
-    body: JSON.stringify({ code, cart_total: cartTotal }),
+    body: JSON.stringify({
+      code,
+      cart_total: cartTotal,
+      ...(shippingFee ? { shipping_fee: shippingFee } : {}),
+      ...(cartItems?.length ? { cart_items: cartItems } : {}),
+    }),
     headers: authHeaders(token),
   });
 }
@@ -1980,6 +2160,7 @@ export async function validatePromoCode(token: string, code: string, cartTotal: 
 
 export type AdminWallet = {
   id: string;
+  user_id: number;
   user_email: string;
   user_name: string;
   balance: string;

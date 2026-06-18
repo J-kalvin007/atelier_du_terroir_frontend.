@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, Play, Sparkles, Leaf, Award, Heart } from "lucide-react";
+import { ArrowRight, Play, Sparkles, Leaf, Award, Heart, X } from "lucide-react";
 import {
   pimentHeroImage,
   poivronsImage,
@@ -17,6 +17,7 @@ const HERO_TITLE = "Atelier du Terroir";
 const HERO_SUBTITLE = "Des produits sains, frais et prets pour le monde.";
 const HERO_PRIMARY_CTA = "Explorer la Boutique";
 const HERO_SECONDARY_CTA = "Notre Histoire";
+const HERO_STORY_VIDEO_ID = "vYjrGxlKjYo";
 const HERO_HIGHLIGHT = "L'authenticite qui se savoure";
 const HERO_HIGHLIGHT_SECOND =
   "Plus qu'un choix alimentaire, une nouvelle facon de vivre et de consommer.";
@@ -43,6 +44,7 @@ const HERO_IMAGES = [tomateHeroImage, pimentHeroImage, poivronsImage];
 export default function HeroSection() {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [textIndex, setTextIndex] = useState(0);
+  const [showStoryVideo, setShowStoryVideo] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -57,6 +59,26 @@ export default function HeroSection() {
     }, 8000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!showStoryVideo) {
+      return;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowStoryVideo(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [showStoryVideo]);
 
   return (
     <section className="relative min-h-[90vh] overflow-hidden bg-background">
@@ -131,15 +153,16 @@ export default function HeroSection() {
                 <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-white/20 to-transparent transition-transform duration-500 group-hover:translate-x-0" />
               </Link>
 
-              <Link
-                href="/about"
+              <button
+                type="button"
+                onClick={() => setShowStoryVideo(true)}
                 className="group flex items-center gap-2 rounded-2xl border border-white/30 bg-white/10 px-6 py-3.5 text-base font-bold text-white backdrop-blur-md transition-all duration-300 hover:border-white/50 hover:bg-white/20 hover:shadow-lg sm:text-lg"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15 transition-all duration-300 group-hover:bg-white/25">
                   <Play className="h-4 w-4 text-[#c2e662] drop-shadow-sm" />
                 </div>
                 {HERO_SECONDARY_CTA}
-              </Link>
+              </button>
             </div>
 
             <div className="flex items-center gap-3 pt-4">
@@ -226,6 +249,51 @@ export default function HeroSection() {
           </motion.div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showStoryVideo ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm sm:p-6"
+            onClick={() => setShowStoryVideo(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Video Notre Histoire"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+              transition={{ duration: 0.25 }}
+              className="relative w-full max-w-4xl overflow-hidden rounded-2xl bg-black shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setShowStoryVideo(false)}
+                className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
+                aria-label="Fermer la video"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              <div className="relative aspect-video w-full">
+                <iframe
+                  src={`https://www.youtube.com/embed/${HERO_STORY_VIDEO_ID}?autoplay=1&rel=0`}
+                  title="Notre Histoire - Atelier du Terroir"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  allowFullScreen
+                  className="absolute inset-0 h-full w-full border-0"
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </section>
   );
 }

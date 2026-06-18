@@ -159,6 +159,15 @@ export function resolveMediaUrl(value: string | null | undefined): string | null
   const apiBase = readPublicApiBaseUrl();
 
   if (/^https?:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.pathname.startsWith("/media/")) {
+        return `${parsed.pathname}${parsed.search}`;
+      }
+    } catch {
+      // Ignore invalid absolute URLs.
+    }
+
     if (apiBase && url.startsWith(apiBase)) {
       const path = url.slice(apiBase.length);
       if (path.startsWith("/media/")) {

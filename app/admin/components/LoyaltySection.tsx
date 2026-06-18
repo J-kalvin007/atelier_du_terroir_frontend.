@@ -15,6 +15,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useAuthSession } from "@/components/auth/useAuthSession";
+import { useConfirmDialog } from "@/components/admin/useConfirmDialog";
 import {
   adjustAdminLoyaltyPoints,
   createAdminLoyaltyProfile,
@@ -29,6 +30,7 @@ import { formatCurrency, readApiError } from "@/lib/utils";
 
 export default function LoyaltySection() {
   const session = useAuthSession();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [tab, setTab] = useState<"profiles" | "tiers">("profiles");
   const [profiles, setProfiles] = useState<AdminLoyaltyProfile[]>([]);
   const [tiers, setTiers] = useState<LoyaltyTier[]>([]);
@@ -147,7 +149,16 @@ export default function LoyaltySection() {
   };
 
   const handleDeleteProfile = async (id: string) => {
-    if (!session?.token || !confirm("Voulez-vous vraiment supprimer ce profil de fidelite ?")) return;
+    if (!session?.token) return;
+
+    const confirmed = await confirm({
+      title: "Supprimer le profil fidélité",
+      description: "Voulez-vous vraiment supprimer ce profil de fidélité ? Cette action est définitive.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     setError(null);
     try {
       await deleteAdminLoyaltyProfile(session.token, id);
@@ -609,6 +620,8 @@ export default function LoyaltySection() {
           </>
         )}
       </AnimatePresence>
+
+      {confirmDialog}
     </div>
   );
 }

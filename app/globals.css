@@ -14,10 +14,10 @@
   --color-success: #22c55e;
   --color-info: #3b82f6;
 
-  --color-background: #fffbf6;
+  --color-background: #f9f6ee;
   --color-surface: #fff6ec;
   --color-surface-alt: #f8f3ea;
-  --color-surface-elevated: #ffffff;
+  --color-surface-elevated: #f9f6ee;
 
   --color-text: #18181b;
   --color-text-secondary: #78716c;
@@ -165,4 +165,200 @@ select {
   font-size: 0.75rem;
   padding: 0.125rem 0.5rem;
   border-radius: 9999px;
+}
+
+/* ─── Promo code animations ─────────────────────────────────────────────── */
+
+@keyframes promo-shimmer {
+  0% {
+    transform: translateX(-120%) skewX(-18deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translateX(220%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+@keyframes promo-glow-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(239, 130, 25, 0.35),
+      0 14px 36px rgba(15, 23, 42, 0.07);
+  }
+  50% {
+    box-shadow:
+      0 0 28px 4px rgba(239, 130, 25, 0.22),
+      0 18px 44px rgba(15, 23, 42, 0.1);
+  }
+}
+
+@keyframes promo-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-6px) scale(1.15);
+    opacity: 0.85;
+  }
+}
+
+@keyframes promo-sparkle-spin {
+  0% {
+    transform: rotate(0deg) scale(0.8);
+    opacity: 0.2;
+  }
+  50% {
+    transform: rotate(180deg) scale(1.1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: rotate(360deg) scale(0.8);
+    opacity: 0.2;
+  }
+}
+
+@keyframes promo-border-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes promo-badge-bounce {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.08);
+  }
+  70% {
+    transform: scale(0.97);
+  }
+}
+
+@keyframes promo-success-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.promo-card-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.promo-card-shell::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: 1.1rem;
+  background: linear-gradient(
+    120deg,
+    #ef8219,
+    #ffd700,
+    #1f4d3f,
+    #ef8219,
+    #ff6b35
+  );
+  background-size: 300% 300%;
+  animation: promo-border-flow 5s ease infinite;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.promo-card-shell:hover::before,
+.promo-card-shell:focus-within::before,
+.promo-card-shell.is-active::before {
+  opacity: 1;
+}
+
+.promo-card-shimmer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.promo-card-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.55),
+    transparent
+  );
+  animation: promo-shimmer 3.8s ease-in-out infinite;
+}
+
+.promo-card-glow {
+  animation: promo-glow-pulse 3s ease-in-out infinite;
+}
+
+.promo-sparkle {
+  animation: promo-float 2.8s ease-in-out infinite;
+}
+
+.promo-sparkle-delay-1 {
+  animation-delay: 0.6s;
+}
+
+.promo-sparkle-delay-2 {
+  animation-delay: 1.2s;
+}
+
+.promo-sparkle-delay-3 {
+  animation-delay: 1.8s;
+}
+
+.promo-badge-live {
+  animation: promo-badge-bounce 2.4s ease-in-out infinite;
+}
+
+.promo-success-ring {
+  animation: promo-success-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.promo-ticket-notch {
+  background-image: radial-gradient(circle at 0 50%, transparent 6px, #fff8f0 6px);
+  background-size: 12px 18px;
+  background-repeat: repeat-y;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .promo-card-shell::before,
+  .promo-card-shimmer::after,
+  .promo-card-glow,
+  .promo-sparkle,
+  .promo-badge-live {
+    animation: none !important;
+  }
 }

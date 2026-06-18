@@ -77,6 +77,24 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
   }, [allowedRole, mounted, session]);
 
   useEffect(() => {
+    if (!mounted || allowedRole !== "admin" || !session) {
+      return;
+    }
+
+    if (hasAdminAccess(session)) {
+      return;
+    }
+
+    if (!adminRefreshResolved) {
+      return;
+    }
+
+    clearSession();
+    adminRefreshAttemptedRef.current = false;
+    setAdminRefreshResolved(false);
+  }, [allowedRole, adminRefreshResolved, mounted, session]);
+
+  useEffect(() => {
     if (!mounted || session || allowedRole === "admin") {
       return;
     }
@@ -138,42 +156,10 @@ export function ProtectedArea({ allowedRole, children }: ProtectedAreaProps) {
     );
   }
 
-  if (allowedRole === "admin" && !hasAdminAccess(session)) {
-    const roleLabel =
-      typeof session.user.raw.role === "string" && session.user.raw.role.trim().length > 0
-        ? session.user.raw.role
-        : session.role;
-
+  if (allowedRole === "admin" && session && !hasAdminAccess(session)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f6f1e7] px-6">
-        <div className="max-w-md space-y-4 rounded-2xl border border-[#eadfce] bg-white p-6 text-center shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#8b5e34]">
-            Acces admin refuse
-          </p>
-          <p className="text-sm leading-7 text-[#4f5e4a]">
-            Ton compte a le role <strong>{roleLabel}</strong>. Seuls les comptes{" "}
-            <strong>platform_admin</strong> peuvent ouvrir le dashboard sur{" "}
-            <strong>/admin</strong>.
-          </p>
-          <div className="flex flex-wrap justify-center gap-3 pt-2">
-            <Link
-              href="/"
-              className="rounded-xl bg-[#1f4d3f] px-4 py-2 text-sm font-semibold text-white"
-            >
-              Retour boutique
-            </Link>
-            <button
-              type="button"
-              className="rounded-xl border border-[#d8c4ab] px-4 py-2 text-sm font-semibold text-[#1f4d3f]"
-              onClick={() => {
-                clearSession();
-                window.location.assign("/admin");
-              }}
-            >
-              Changer de compte
-            </button>
-          </div>
-        </div>
+        <p className="text-sm text-[#4f5e4a]">Preparation de la connexion admin...</p>
       </div>
     );
   }

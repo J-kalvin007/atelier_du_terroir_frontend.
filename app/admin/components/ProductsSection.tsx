@@ -1,7 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Image from "next/image";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -19,9 +18,10 @@ import {
   X,
 } from "lucide-react";
 import { AdminAccessNotice } from "@/components/admin/AdminAccessNotice";
+import { useConfirmDialog } from "@/components/admin/useConfirmDialog";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import { hasAdminAccess } from "@/lib/auth";
-import { cn, formatCurrency, readApiError, resolveMediaUrl, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
+import { cn, formatCurrency, isUuid, readApiError, resolveMediaUrl, sanitizeApiSlug, sanitizeDecimalPrice } from "@/lib/utils";
 import ProductImagesPanel from "./ProductImagesPanel";
 import ProductVariantsPanel from "./ProductVariantsPanel";
 import {
@@ -30,12 +30,13 @@ import {
   createAdminProduct,
   createAdminProductImage,
   deleteAdminProduct,
+  deleteAdminProductImage,
   getAdminCategories,
   getAdminProductById,
   getAdminProductImages,
   getAdminProducts,
   getAdminProductVariants,
-  getPublicCategories,
+  getCategories,
   updateAdminProduct,
   type AdminCategory,
   type AdminCatalogProduct,
@@ -82,6 +83,7 @@ interface UploadedProductImage {
 interface ProductFormErrors {
   name?: string;
   sku?: string;
+  slug?: string;
   price?: string;
   stock?: string;
   category?: string;
@@ -124,6 +126,91 @@ function makeSku(value: string) {
   return (base || "PRODUIT").slice(0, 100);
 }
 
+function makeUniqueSku(value: string, takenSkus: Iterable<string>) {
+  const taken = new Set(Array.from(takenSkus, (sku) => sku.toLowerCase()));
+  const base = makeSku(value);
+  if (!taken.has(base.toLowerCase())) return base;
+
+  for (let index = 2; index <= 999; index += 1) {
+    const candidate = `${base.slice(0, 92)}_${index}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+
+  return `${base.slice(0, 92)}_${Date.now().toString(36).slice(-6)}`;
+}
+
+function makeUniqueSlug(value: string, takenSlugs: Iterable<string>) {
+  const taken = new Set(Array.from(takenSlugs, (slug) => slug.toLowerCase()));
+  const base = slugify(value);
+  if (!taken.has(base.toLowerCase())) return base;
+
+  for (let index = 2; index <= 999; index += 1) {
+    const candidate = `${base.slice(0, 45)}_${index}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+
+  return `${base.slice(0, 45)}_${Date.now().toString(36).slice(-6)}`;
+}
+
+function flattenAdminCategories(categories: AdminCategory[]): AdminCategory[] {
+  return categories.flatMap((category) => [
+    category,
+    ...(Array.isArray(category.children)
+      ? flattenAdminCategories(category.children as AdminCategory[])
+      : []),
+  ]);
+}
+
+function collectTakenProductIdentifiers(catalogProducts: AdminCatalogProduct[]) {
+  const skus = new Set<string>();
+  const slugs = new Set<string>();
+
+  catalogProducts.forEach((product) => {
+    if (product.sku?.trim()) skus.add(product.sku.trim().toLowerCase());
+    const slug = product.slug?.trim() || sanitizeApiSlug(product.name);
+    if (slug) slugs.add(slug.toLowerCase());
+  });
+
+  return { skus, slugs };
+}
+
+function ensureUniqueProductIdentifiers(
+  payload: AdminCatalogProductPayload,
+  catalogProducts: AdminCatalogProduct[],
+  editingProductId?: string | null
+): AdminCatalogProductPayload {
+  const relevantProducts = editingProductId
+    ? catalogProducts.filter((product) => product.id !== editingProductId)
+    : catalogProducts;
+  const { skus, slugs } = collectTakenProductIdentifiers(relevantProducts);
+
+  return {
+    ...payload,
+    sku: makeUniqueSku(payload.sku || payload.name, skus),
+    slug: makeUniqueSlug(payload.slug || payload.name, slugs),
+  };
+}
+
+function extractProductFormApiErrors(error: unknown): ProductFormErrors {
+  const message = readApiError(error, "");
+  const errors: ProductFormErrors = {};
+
+  message.split("|").forEach((part) => {
+    const match = part.trim().match(/^([a-z_]+):\s*(.+)$/i);
+    if (!match) return;
+
+    const field = match[1].toLowerCase();
+    const detail = match[2].trim();
+    if (field === "category") errors.category = detail;
+    if (field === "sku") errors.sku = detail;
+    if (field === "slug") errors.slug = detail;
+    if (field === "name") errors.name = detail;
+    if (field === "price") errors.price = detail;
+  });
+
+  return errors;
+}
+
 function validateProductForm(
   form: ProductFormState,
   selectedCategoryId: string
@@ -136,7 +223,11 @@ function validateProductForm(
   if (form.stock.trim() && Number.isNaN(Number(form.stock))) {
     errors.stock = "stock doit etre un entier >= 0.";
   }
-  if (!selectedCategoryId) errors.category = "category* (UUID) est obligatoire.";
+  if (!selectedCategoryId) {
+    errors.category = "Sélectionnez une catégorie.";
+  } else if (!isUuid(selectedCategoryId)) {
+    errors.category = "Catégorie invalide. Rechargez la page ou choisissez une autre catégorie.";
+  }
   if (!PRODUCT_TYPE_OPTIONS.some((option) => option.value === form.product_type)) {
     errors.product_type = "product_type* doit etre RAW, PROCESSED ou EXPORT.";
   }
@@ -199,8 +290,193 @@ function mapProduct(product: AdminCatalogProduct): ProductRow {
   };
 }
 
+function revokePreviewUrl(url: string) {
+  if (url.startsWith("blob:")) {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function createUploadedImageFromFile(file: File): UploadedProductImage {
+  return {
+    id: `${file.name}-${file.lastModified}-${file.size}`,
+    file,
+    preview: URL.createObjectURL(file),
+    alt_text: file.name.replace(/\.[^.]+$/, ""),
+  };
+}
+
+function getDisplayImageSrc(src: string) {
+  return resolveMediaUrl(src) || src;
+}
+
+function AdminMediaImage({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+}) {
+  const displaySrc = getDisplayImageSrc(src);
+  if (!displaySrc) return null;
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={displaySrc} alt={alt} className={className} />
+  );
+}
+
+function ImageRemoveButton({
+  onClick,
+  className,
+  disabled = false,
+  loading = false,
+}: {
+  onClick: () => void;
+  className?: string;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled || loading}
+      onClick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        onClick();
+      }}
+      className={cn(
+        "absolute right-1 top-1 z-30 flex h-6 w-6 items-center justify-center rounded-full bg-slate-900/85 text-white shadow-md transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60",
+        className
+      )}
+      aria-label="Supprimer définitivement l'image"
+      title="Supprimer définitivement"
+    >
+      {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+function SelectableImageCard({
+  selected,
+  onSelect,
+  children,
+  className,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={cn(
+        "cursor-pointer overflow-hidden rounded-xl border bg-white text-left transition-all",
+        selected ? "border-primary ring-2 ring-primary/30 shadow-md" : "border-slate-200 hover:border-primary/40",
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function ProductImageTile({
+  selected,
+  onSelect,
+  onRemove,
+  showRemove = true,
+  removing = false,
+  imageSrc,
+  imageAlt,
+  imageHeightClass = "h-24",
+  label,
+  sublabel,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+  showRemove?: boolean;
+  removing?: boolean;
+  imageSrc: string;
+  imageAlt: string;
+  imageHeightClass?: string;
+  label: string;
+  sublabel?: string;
+}) {
+  return (
+    <div className="relative">
+      <SelectableImageCard selected={selected} onSelect={onSelect}>
+        <div className={cn("relative flex w-full items-center justify-center overflow-hidden bg-white", imageHeightClass)}>
+          <AdminMediaImage
+            src={imageSrc}
+            alt={imageAlt}
+            className="max-h-full max-w-full object-contain p-2"
+          />
+        </div>
+        <div className="p-2">
+          <p className="truncate text-[10px] font-medium text-slate-700">{label}</p>
+          {sublabel ? <p className="mt-1 text-[9px] text-slate-400">{sublabel}</p> : null}
+        </div>
+      </SelectableImageCard>
+      {showRemove ? (
+        <ImageRemoveButton onClick={onRemove} loading={removing} disabled={removing} />
+      ) : null}
+    </div>
+  );
+}
+
+function ProductImagePreviewPanel({
+  previewSrc,
+  previewAlt,
+  onRemove,
+  footer,
+  meta,
+}: {
+  previewSrc: string;
+  previewAlt: string;
+  onRemove: () => void;
+  footer?: string;
+  meta?: string;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <label className="block text-xs font-medium text-slate-500">Prévisualisation</label>
+        {meta ? <span className="text-[10px] text-slate-400">{meta}</span> : null}
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+        <div className="relative flex h-72 items-center justify-center bg-[linear-gradient(135deg,#fff7ed_0%,#ffffff_45%,#f8fafc_100%)]">
+          {previewSrc ? (
+            <>
+              <AdminMediaImage
+                src={previewSrc}
+                alt={previewAlt}
+                className="max-h-full max-w-full object-contain p-4"
+              />
+              <ImageRemoveButton onClick={onRemove} className="right-3 top-3" />
+            </>
+          ) : (
+            <div className="text-center text-slate-400">
+              <Upload className="mx-auto h-6 w-6" />
+              <p className="mt-2 text-xs">Aucune image sélectionnée</p>
+            </div>
+          )}
+        </div>
+        {previewSrc && footer ? (
+          <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-600">{footer}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function ProductsSection() {
   const session = useAuthSession();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [showAdvancedFields, setShowAdvancedFields] = useState(false);
@@ -222,10 +498,16 @@ export default function ProductsSection() {
   const [selectedImageId, setSelectedImageId] = useState("");
   const [uploadedImages, setUploadedImages] = useState<UploadedProductImage[]>([]);
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
+  const [previewDismissed, setPreviewDismissed] = useState(false);
   const [modalTab, setModalTab] = useState<"info" | "images" | "variants">("info");
   const [viewingProduct, setViewingProduct] = useState<AdminCatalogProduct | null>(null);
   const [viewingLoading, setViewingLoading] = useState(false);
   const [linkingLibraryImage, setLinkingLibraryImage] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadedImagesRef = useRef(uploadedImages);
+  uploadedImagesRef.current = uploadedImages;
 
   const rows = useMemo(() => products.map(mapProduct), [products]);
 
@@ -253,20 +535,22 @@ export default function ProductsSection() {
   );
 
   const selectedLibraryImage = productImages.find((image) => image.id === selectedImageId);
+  const activeLibraryImage = !previewDismissed ? selectedLibraryImage : null;
   const editingProduct = editingProductId
     ? products.find((product) => product.id === editingProductId) ?? null
     : null;
   const existingProductImages = editingProduct?.images ?? [];
   const currentUploadedImage = uploadedImages[previewImageIndex];
   const currentExistingImage =
-    uploadedImages.length === 0 && !selectedLibraryImage
+    uploadedImages.length === 0 && !activeLibraryImage && !previewDismissed
       ? existingProductImages[previewImageIndex] ?? existingProductImages[0]
       : null;
-  const currentPreviewImage =
-    currentUploadedImage?.preview || selectedLibraryImage?.image || currentExistingImage?.image || "";
+  const currentPreviewImage = getDisplayImageSrc(
+    currentUploadedImage?.preview || activeLibraryImage?.image || currentExistingImage?.image || ""
+  );
   const currentPreviewAlt =
     currentUploadedImage?.alt_text ||
-    selectedLibraryImage?.alt_text ||
+    activeLibraryImage?.alt_text ||
     currentExistingImage?.alt_text ||
     form.alt_text ||
     form.name ||
@@ -304,18 +588,17 @@ export default function ProductsSection() {
     setCatalogLoading(true);
     try {
       const nextCategories = session?.token
-        ? await getAdminCategories(session.token)
-        : await getPublicCategories().then((items) =>
-            items.map((category) => ({
-              id: category.id,
-              name: category.name,
-              slug: category.slug,
-              description: category.description,
-              image: category.image,
-              children: category.children ?? null,
-            }))
-          );
-      setCategories(nextCategories);
+        ? flattenAdminCategories(await getAdminCategories(session.token))
+        : (await getCategories()).map((category) => ({
+            id: category.id,
+            name: category.name,
+            slug: category.slug,
+            description: category.description,
+            image: category.image,
+            children: category.children ?? null,
+          }));
+
+      setCategories(nextCategories.filter((category) => Boolean(category.id && category.name)));
     } catch (err) {
       console.error("Error fetching categories:", err);
       setError(readApiError(err, "Impossible de charger les catégories."));
@@ -356,7 +639,18 @@ export default function ProductsSection() {
     void loadProductMedia();
   }, [showModal, session?.token]);
 
+  const resetUploadInput = () => {
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = "";
+    }
+  };
+
+  const revokeUploadedPreviews = (images: UploadedProductImage[]) => {
+    images.forEach((image) => revokePreviewUrl(image.preview));
+  };
+
   const resetForm = () => {
+    revokeUploadedPreviews(uploadedImages);
     setForm(INITIAL_FORM);
     setFormErrors({});
     setShowAdvancedFields(false);
@@ -365,8 +659,10 @@ export default function ProductsSection() {
     setSelectedImageId("");
     setUploadedImages([]);
     setPreviewImageIndex(0);
+    setPreviewDismissed(false);
     setModalTab("info");
     setEditingProductId(null);
+    resetUploadInput();
   };
 
   const syncEditingProductImages = (nextImages: AdminProductImage[]) => {
@@ -436,8 +732,10 @@ export default function ProductsSection() {
       0
     );
     setSelectedImageId(product.images?.find((image) => image.is_primary)?.id || "");
+    revokeUploadedPreviews(uploadedImages);
     setUploadedImages([]);
     setPreviewImageIndex(primaryImageIndex);
+    setPreviewDismissed(false);
     setModalTab("info");
     setShowAdvancedFields(true);
     setError(null);
@@ -506,6 +804,8 @@ export default function ProductsSection() {
   const closeModal = () => {
     setShowModal(false);
     resetForm();
+    setError(null);
+    setNotice(null);
   };
 
   const closeDetailModal = () => {
@@ -523,51 +823,191 @@ export default function ProductsSection() {
     }));
   };
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
 
-    void Promise.all(
-      files.map(
-        (file) =>
-          new Promise<UploadedProductImage>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const result = typeof reader.result === "string" ? reader.result : "";
-              resolve({
-                id: `${file.name}-${file.lastModified}`,
-                file,
-                preview: result,
-                alt_text: file.name.replace(/\.[^.]+$/, ""),
-              });
-            };
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(file);
-          })
-      )
-    ).then((nextImages) => {
-      let hadExistingImages = false;
+    if (editingProductId && modalTab === "images" && session?.token) {
+      setUploadingImages(true);
+      setError(null);
+      setNotice(null);
 
-      setUploadedImages((prev) => {
-        hadExistingImages = prev.length > 0;
-        const mergedImages = [...prev];
+      try {
+        const uploadedImagesFromApi: AdminProductImage[] = [];
 
-        nextImages.forEach((image) => {
-          if (!mergedImages.some((existingImage) => existingImage.id === image.id)) {
-            mergedImages.push(image);
-          }
-        });
+        for (const [index, file] of files.entries()) {
+          const uploaded = await createAdminProductImage(session.token, {
+            product: editingProductId,
+            image: file,
+            alt_text: file.name.replace(/\.[^.]+$/, "") || form.alt_text || form.name,
+            is_primary: existingProductImages.length === 0 && index === 0,
+            is_active: true,
+          });
+          uploadedImagesFromApi.push(uploaded);
+        }
 
-        return mergedImages;
-      });
-      setPreviewImageIndex((prev) => (hadExistingImages ? prev : 0));
-      setSelectedImageId("");
-      if (!form.alt_text && nextImages[0]?.alt_text) {
-        setForm((prev) => ({ ...prev, alt_text: nextImages[0].alt_text }));
+        syncEditingProductImages([...existingProductImages, ...uploadedImagesFromApi]);
+        setNotice(
+          uploadedImagesFromApi.length > 1
+            ? `${uploadedImagesFromApi.length} images ajoutées au produit.`
+            : "Image ajoutée au produit."
+        );
+      } catch (uploadError) {
+        console.error("Error uploading product image:", uploadError);
+        setError(readApiError(uploadError, "Impossible d'ajouter l'image au produit."));
+      } finally {
+        setUploadingImages(false);
       }
-      event.target.value = "";
+
+      return;
+    }
+
+    const nextImages = files.map(createUploadedImageFromFile);
+
+    setUploadedImages((prev) => {
+      const mergedImages = [...prev];
+      nextImages.forEach((image) => {
+        if (!mergedImages.some((existingImage) => existingImage.id === image.id)) {
+          mergedImages.push(image);
+        } else {
+          revokePreviewUrl(image.preview);
+        }
+      });
+
+      if (prev.length === 0) {
+        setPreviewImageIndex(0);
+      }
+
+      return mergedImages;
     });
+
+    setPreviewDismissed(false);
+    setSelectedImageId("");
+
+    if (!form.alt_text && nextImages[0]?.alt_text) {
+      setForm((prev) => ({ ...prev, alt_text: nextImages[0].alt_text }));
+    }
+
+    resetUploadInput();
   };
+
+  const removeUploadedImage = (index: number) => {
+    const removed = uploadedImages[index];
+    if (removed) {
+      revokePreviewUrl(removed.preview);
+    }
+
+    const next = uploadedImages.filter((_, itemIndex) => itemIndex !== index);
+
+    let nextPreview = previewImageIndex;
+    if (next.length === 0) {
+      nextPreview = 0;
+      setPreviewDismissed(true);
+      setSelectedImageId("");
+      resetUploadInput();
+    } else if (index < previewImageIndex) {
+      nextPreview = previewImageIndex - 1;
+    } else if (index === previewImageIndex) {
+      nextPreview = Math.min(previewImageIndex, next.length - 1);
+    }
+
+    setUploadedImages(next);
+    setPreviewImageIndex(nextPreview);
+  };
+
+  const clearAllUploadedImages = () => {
+    revokeUploadedPreviews(uploadedImages);
+    setUploadedImages([]);
+    setPreviewImageIndex(0);
+    setPreviewDismissed(true);
+    setSelectedImageId("");
+    resetUploadInput();
+  };
+
+  const dismissPreview = () => {
+    setSelectedImageId("");
+    setPreviewDismissed(true);
+    resetUploadInput();
+  };
+
+  const clearPreviewSelection = () => {
+    if (uploadedImages.length > 0) {
+      if (uploadedImages.length === 1) {
+        clearAllUploadedImages();
+        return;
+      }
+
+      removeUploadedImage(previewImageIndex);
+      return;
+    }
+
+    if (activeLibraryImage) {
+      void handlePermanentDeleteImage(activeLibraryImage);
+      return;
+    }
+
+    if (currentExistingImage) {
+      void handlePermanentDeleteImage(currentExistingImage);
+      return;
+    }
+
+    dismissPreview();
+  };
+
+  const handlePermanentDeleteImage = async (image: AdminProductImage) => {
+    if (!session?.token) {
+      setError("Connecte-toi avec un compte admin pour supprimer une image.");
+      return;
+    }
+
+    const confirmed = await confirm({
+      title: "Supprimer l'image",
+      description:
+        "Supprimer définitivement cette image ? Elle sera retirée du produit et de la bibliothèque.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
+    setDeletingImageId(image.id);
+    setError(null);
+
+    try {
+      await deleteAdminProductImage(session.token, image.id);
+
+      setProductImages((prev) => prev.filter((item) => item.id !== image.id));
+
+      if (editingProductId) {
+        const nextImages = existingProductImages.filter((item) => item.id !== image.id);
+        syncEditingProductImages(nextImages);
+        setPreviewImageIndex((current) =>
+          Math.min(current, Math.max(0, nextImages.length - 1))
+        );
+      }
+
+      if (selectedImageId === image.id) {
+        setSelectedImageId("");
+        setPreviewDismissed(true);
+      }
+
+      setNotice("Image supprimée définitivement.");
+    } catch (err) {
+      console.error("Error deleting product image:", err);
+      setError(readApiError(err, "Impossible de supprimer l'image."));
+    } finally {
+      setDeletingImageId(null);
+    }
+  };
+
+  const requestPermanentDeleteImage = (image: AdminProductImage) => {
+    void handlePermanentDeleteImage(image);
+  };
+
+  useEffect(() => {
+    return () => {
+      revokeUploadedPreviews(uploadedImagesRef.current);
+    };
+  }, []);
 
   const handleSaveProduct = async () => {
     setSaving(true);
@@ -577,6 +1017,7 @@ export default function ProductsSection() {
 
     if (Object.keys(validationErrors).length > 0) {
       setFormErrors(validationErrors);
+      setError("Complétez les champs obligatoires : catégorie, nom, SKU et prix.");
       setSaving(false);
       return;
     }
@@ -594,7 +1035,11 @@ export default function ProductsSection() {
     }
 
     try {
-      const payload = buildProductPayload(form, selectedCategoryId);
+      let payload = buildProductPayload(form, selectedCategoryId);
+      if (!editingProductId) {
+        payload = ensureUniqueProductIdentifiers(payload, products);
+        setForm((prev) => ({ ...prev, sku: payload.sku, slug: payload.slug }));
+      }
 
       const savedProduct = editingProductId
         ? await updateAdminProduct(session.token, editingProductId, payload)
@@ -683,7 +1128,13 @@ export default function ProductsSection() {
         ]);
       }
 
-      closeModal();
+      setNotice(
+        editingProductId
+          ? "Produit modifié avec succès."
+          : "Produit créé avec succès."
+      );
+      setShowModal(false);
+      resetForm();
       void loadProducts();
     } catch (err) {
       console.error("Error saving product:", err);
@@ -703,6 +1154,12 @@ export default function ProductsSection() {
         selectedImageId,
         uploadedImages: uploadedImages.length,
       });
+
+      const apiFieldErrors = extractProductFormApiErrors(err);
+      if (Object.keys(apiFieldErrors).length > 0) {
+        setFormErrors((prev) => ({ ...prev, ...apiFieldErrors }));
+      }
+
       setError(
         readApiError(
           err,
@@ -718,6 +1175,14 @@ export default function ProductsSection() {
 
   const handleDeleteProduct = async (id: string) => {
     if (!session?.token) return;
+
+    const confirmed = await confirm({
+      title: "Supprimer le produit",
+      description: "Cette action est définitive. Le produit et ses données associées seront supprimés.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
 
     setDeletingId(id);
     setError(null);
@@ -742,6 +1207,7 @@ export default function ProductsSection() {
           </p>
         </div>
         <button
+          type="button"
           onClick={openCreateModal}
           className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-200 transition-all hover:bg-primary-hover"
         >
@@ -832,10 +1298,9 @@ export default function ProductsSection() {
                   <tr key={product.id} className="border-b border-slate-100 transition-colors hover:bg-slate-50">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
                           {product.image ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
+                            <AdminMediaImage
                               src={product.image}
                               alt={product.name}
                               className="h-full w-full object-cover"
@@ -956,7 +1421,7 @@ export default function ProductsSection() {
                     Champs Swagger ProductCreateUpdate — les images sont uploadees apres creation.
                   </p>
                 </div>
-                <button onClick={closeModal} className="text-slate-400 hover:text-slate-900">
+                <button type="button" onClick={closeModal} className="text-slate-400 hover:text-slate-900">
                   <X className="h-5 w-5" />
                 </button>
               </div>
@@ -987,20 +1452,68 @@ export default function ProductsSection() {
                     </label>
                     <label className="flex h-28 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 hover:border-primary/40 hover:bg-orange-50/40">
                       <div className="text-center">
-                        <Upload className="mx-auto h-6 w-6 text-slate-400" />
+                        {uploadingImages ? (
+                          <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
+                        ) : (
+                          <Upload className="mx-auto h-6 w-6 text-slate-400" />
+                        )}
                         <p className="mt-1 text-[11px] font-medium text-slate-600">
-                          Choisir une ou plusieurs images
+                          {uploadingImages
+                            ? "Envoi en cours..."
+                            : "Choisir une ou plusieurs images (ajout immédiat)"}
                         </p>
                       </div>
-                      <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
+                      <input
+                        ref={uploadInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        disabled={uploadingImages}
+                        onChange={(event) => void handleImageUpload(event)}
+                      />
                     </label>
                   </div>
 
+                  <ProductImagePreviewPanel
+                    previewSrc={currentPreviewImage}
+                    previewAlt={currentPreviewAlt}
+                    onRemove={clearPreviewSelection}
+                    meta={
+                      uploadedImages.length > 0
+                        ? `${uploadedImages.length} image(s) prête(s) à enregistrer`
+                        : `${existingProductImages.length} image(s) enregistrée(s)`
+                    }
+                    footer={
+                      uploadedImages.length > 0
+                        ? "Ces images seront enregistrées depuis l'onglet Informations."
+                        : undefined
+                    }
+                  />
+
                   {uploadedImages.length > 0 ? (
-                    <p className="text-xs text-amber-700">
-                      {uploadedImages.length} image(s) seront liées au produit lors de l&apos;enregistrement
-                      (onglet Informations).
-                    </p>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+                        Images sélectionnées
+                      </label>
+                      <div className="grid grid-cols-3 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        {uploadedImages.map((image, index) => (
+                          <ProductImageTile
+                            key={image.id}
+                            selected={previewImageIndex === index}
+                            onSelect={() => setPreviewImageIndex(index)}
+                            onRemove={() => removeUploadedImage(index)}
+                            imageSrc={image.preview}
+                            imageAlt={image.alt_text}
+                            label={index === 0 ? "Image principale" : `Image ${index + 1}`}
+                          />
+                        ))}
+                      </div>
+                      <p className="mt-2 text-xs text-amber-700">
+                        {uploadedImages.length} image(s) seront liées au produit lors de l&apos;enregistrement
+                        (onglet Informations).
+                      </p>
+                    </div>
                   ) : null}
 
                   <div>
@@ -1021,36 +1534,23 @@ export default function ProductsSection() {
                     </div>
                     <div className="grid max-h-56 grid-cols-2 gap-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
                       {productImages.map((image) => (
-                        <button
+                        <ProductImageTile
                           key={image.id}
-                          type="button"
-                          onClick={() => {
+                          selected={selectedImageId === image.id}
+                          onSelect={() => {
                             setSelectedImageId(image.id);
+                            setPreviewDismissed(false);
                             setUploadedImages([]);
                             setPreviewImageIndex(0);
                           }}
-                          className={cn(
-                            "overflow-hidden rounded-xl border bg-white text-left transition-all",
-                            selectedImageId === image.id
-                              ? "border-primary ring-2 ring-primary/30 shadow-md"
-                              : "border-slate-200 hover:border-primary/40"
-                          )}
-                        >
-                          <div className="relative h-28 w-full bg-white">
-                            <Image
-                              src={image.image}
-                              alt={image.alt_text || "Image produit"}
-                              fill
-                              className="object-contain p-2"
-                              sizes="160px"
-                            />
-                          </div>
-                          <div className="p-2">
-                            <p className="truncate text-[10px] font-medium text-slate-700">
-                              {image.alt_text || "Sans texte alternatif"}
-                            </p>
-                          </div>
-                        </button>
+                          onRemove={() => requestPermanentDeleteImage(image)}
+                          removing={deletingImageId === image.id}
+                          imageSrc={image.image}
+                          imageAlt={image.alt_text || "Image produit"}
+                          imageHeightClass="h-28"
+                          label={image.alt_text || "Sans texte alternatif"}
+                          sublabel={image.is_primary ? "Image principale" : "Image secondaire"}
+                        />
                       ))}
                     </div>
                   </div>
@@ -1064,7 +1564,10 @@ export default function ProductsSection() {
                     </label>
                     <select
                       value={selectedCategoryId}
-                      onChange={(e) => setSelectedCategoryId(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedCategoryId(e.target.value);
+                        setFormErrors((prev) => ({ ...prev, category: undefined }));
+                      }}
                       className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                     >
                       <option value="">Selectionner une categorie</option>
@@ -1103,7 +1606,10 @@ export default function ProductsSection() {
                       <input
                         value={form.sku}
                         maxLength={100}
-                        onChange={(e) => handleFormChange("sku", e.target.value)}
+                        onChange={(e) => {
+                          handleFormChange("sku", e.target.value);
+                          setFormErrors((prev) => ({ ...prev, sku: undefined }));
+                        }}
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                       />
                       {formErrors.sku && <p className="mt-1 text-xs text-red-600">{formErrors.sku}</p>}
@@ -1115,9 +1621,13 @@ export default function ProductsSection() {
                       <input
                         value={form.slug}
                         maxLength={50}
-                        onChange={(e) => handleFormChange("slug", e.target.value)}
+                        onChange={(e) => {
+                          handleFormChange("slug", e.target.value);
+                          setFormErrors((prev) => ({ ...prev, slug: undefined }));
+                        }}
                         className="h-10 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none focus:border-primary"
                       />
+                      {formErrors.slug && <p className="mt-1 text-xs text-red-600">{formErrors.slug}</p>}
                     </div>
                   </div>
 
@@ -1301,7 +1811,14 @@ export default function ProductsSection() {
                           Les images seront liées automatiquement au produit après création.
                         </p>
                       </div>
-                      <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
+                      <input
+                        ref={uploadInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => void handleImageUpload(event)}
+                      />
                     </label>
                   </div>
 
@@ -1314,49 +1831,48 @@ export default function ProductsSection() {
                     />
                   </div>
 
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <label className="block text-xs font-medium text-slate-500">Prévisualisation</label>
-                      <span className="text-[10px] text-slate-400">
-                        {uploadedImages.length > 0
-                          ? `${uploadedImages.length} image(s) prêtes pour ce produit`
-                          : existingProductImages.length > 0
-                            ? `${existingProductImages.length} image(s) déjà enregistrée(s)`
+                  <ProductImagePreviewPanel
+                    previewSrc={currentPreviewImage}
+                    previewAlt={currentPreviewAlt}
+                    onRemove={clearPreviewSelection}
+                    meta={
+                      uploadedImages.length > 0
+                        ? `${uploadedImages.length} image(s) prête(s) pour ce produit`
+                        : existingProductImages.length > 0
+                          ? `${existingProductImages.length} image(s) déjà enregistrée(s)`
                           : catalogLoading
                             ? "Chargement..."
-                            : `${productImages.length} image(s) disponibles`}
-                      </span>
-                    </div>
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                      <div className="relative flex h-72 items-center justify-center bg-[linear-gradient(135deg,#fff7ed_0%,#ffffff_45%,#f8fafc_100%)]">
-                        {currentPreviewImage ? (
-                          <Image
-                            src={currentPreviewImage}
-                            alt={currentPreviewAlt}
-                            fill
-                            className="object-contain p-4"
-                            sizes="420px"
+                            : `${productImages.length} image(s) disponibles`
+                    }
+                    footer={
+                      uploadedImages.length > 0
+                        ? `${uploadedImages.length} image(s) seront liées au produit lors de l'enregistrement.`
+                        : currentExistingImage
+                          ? "Image actuelle du produit"
+                          : activeLibraryImage
+                            ? "Image existante sélectionnée"
+                            : undefined
+                    }
+                  />
+
+                  {uploadedImages.length > 0 ? (
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Images sélectionnées</label>
+                      <div className="grid grid-cols-3 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        {uploadedImages.map((image, index) => (
+                          <ProductImageTile
+                            key={image.id}
+                            selected={previewImageIndex === index}
+                            onSelect={() => setPreviewImageIndex(index)}
+                            onRemove={() => removeUploadedImage(index)}
+                            imageSrc={image.preview}
+                            imageAlt={image.alt_text}
+                            label={index === 0 ? "Image principale" : `Image ${index + 1}`}
                           />
-                        ) : (
-                          <div className="text-center text-slate-400">
-                            <Upload className="mx-auto h-6 w-6" />
-                            <p className="mt-2 text-xs">Aucune image sélectionnée</p>
-                          </div>
-                        )}
+                        ))}
                       </div>
-                      {currentPreviewImage ? (
-                        <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-600">
-                          {uploadedImages.length > 0
-                            ? `${uploadedImages.length} image(s) préparée(s) pour ce produit`
-                            : currentExistingImage
-                              ? "Image actuelle du produit"
-                            : selectedImageId
-                              ? "Image existante sélectionnée"
-                              : "Nouvelle image importée"}
-                        </div>
-                      ) : null}
                     </div>
-                  </div>
+                  ) : null}
 
                   {existingProductImages.length > 0 ? (
                     <div>
@@ -1365,63 +1881,28 @@ export default function ProductsSection() {
                       </label>
                       <div className="grid grid-cols-3 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                         {existingProductImages.map((image, index) => (
-                          <button
+                          <ProductImageTile
                             key={image.id}
-                            type="button"
-                            onClick={() => {
+                            selected={
+                              currentExistingImage?.id === image.id &&
+                              uploadedImages.length === 0 &&
+                              !previewDismissed
+                            }
+                            onSelect={() => {
                               setPreviewImageIndex(index);
                               setSelectedImageId(image.id);
+                              setPreviewDismissed(false);
                               setUploadedImages([]);
                               if (!form.alt_text) {
                                 setForm((prev) => ({ ...prev, alt_text: image.alt_text || prev.name }));
                               }
                             }}
-                            className={cn(
-                              "overflow-hidden rounded-xl border bg-white text-left transition-all",
-                              currentExistingImage?.id === image.id && uploadedImages.length === 0
-                                ? "border-primary ring-2 ring-primary/30 shadow-md"
-                                : "border-slate-200 hover:border-primary/40"
-                            )}
-                          >
-                            <div className="relative h-24 w-full bg-white">
-                              <Image src={image.image} alt={image.alt_text || "Image produit"} fill className="object-contain p-2" sizes="120px" />
-                            </div>
-                            <div className="p-2">
-                              <p className="truncate text-[10px] font-medium text-slate-700">
-                                {image.is_primary ? "Image principale" : `Image ${index + 1}`}
-                              </p>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {uploadedImages.length > 0 ? (
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium text-slate-500">Images sélectionnées</label>
-                      <div className="grid grid-cols-3 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        {uploadedImages.map((image, index) => (
-                          <button
-                            key={image.id}
-                            type="button"
-                            onClick={() => setPreviewImageIndex(index)}
-                            className={cn(
-                              "overflow-hidden rounded-xl border bg-white text-left transition-all",
-                              previewImageIndex === index
-                                ? "border-primary ring-2 ring-primary/30 shadow-md"
-                                : "border-slate-200 hover:border-primary/40"
-                            )}
-                          >
-                            <div className="relative h-24 w-full bg-white">
-                              <Image src={image.preview} alt={image.alt_text} fill className="object-contain p-2" sizes="120px" />
-                            </div>
-                            <div className="p-2">
-                              <p className="truncate text-[10px] font-medium text-slate-700">
-                                {index === 0 ? "Image principale" : `Image ${index + 1}`}
-                              </p>
-                            </div>
-                          </button>
+                            onRemove={() => requestPermanentDeleteImage(image)}
+                            removing={deletingImageId === image.id}
+                            imageSrc={image.image}
+                            imageAlt={image.alt_text || "Image produit"}
+                            label={image.is_primary ? "Image principale" : `Image ${index + 1}`}
+                          />
                         ))}
                       </div>
                     </div>
@@ -1436,42 +1917,26 @@ export default function ProductsSection() {
                         </div>
                       ) : (
                         productImages.map((image) => (
-                          <button
+                          <ProductImageTile
                             key={image.id}
-                            type="button"
-                            onClick={() => {
+                            selected={selectedImageId === image.id}
+                            onSelect={() => {
                               setSelectedImageId(image.id);
+                              setPreviewDismissed(false);
                               setUploadedImages([]);
                               setPreviewImageIndex(0);
                               if (!form.alt_text) {
                                 setForm((prev) => ({ ...prev, alt_text: image.alt_text || prev.name }));
                               }
                             }}
-                            className={cn(
-                              "overflow-hidden rounded-xl border bg-white text-left transition-all",
-                              selectedImageId === image.id
-                                ? "border-primary ring-2 ring-primary/30 shadow-md"
-                                : "border-slate-200 hover:border-primary/40"
-                            )}
-                          >
-                            <div className="relative h-28 w-full bg-white">
-                              <Image
-                                src={image.image}
-                                alt={image.alt_text || "Image produit"}
-                                fill
-                                className="object-contain p-2"
-                                sizes="160px"
-                              />
-                            </div>
-                            <div className="p-2">
-                              <p className="truncate text-[10px] font-medium text-slate-700">
-                                {image.alt_text || "Sans texte alternatif"}
-                              </p>
-                              <p className="mt-1 text-[9px] text-slate-400">
-                                {image.is_primary ? "Image principale" : "Image secondaire"}
-                              </p>
-                            </div>
-                          </button>
+                            onRemove={() => requestPermanentDeleteImage(image)}
+                            removing={deletingImageId === image.id}
+                            imageSrc={image.image}
+                            imageAlt={image.alt_text || "Image produit"}
+                            imageHeightClass="h-28"
+                            label={image.alt_text || "Sans texte alternatif"}
+                            sublabel={image.is_primary ? "Image principale" : "Image secondaire"}
+                          />
                         ))
                       )}
                     </div>
@@ -1484,8 +1949,21 @@ export default function ProductsSection() {
               </div>
               )}
 
+              {showModal && error ? (
+                <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                  {error}
+                </div>
+              ) : null}
+
+              {showModal && notice ? (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                  {notice}
+                </div>
+              ) : null}
+
               <div className="mt-5 flex justify-end gap-3">
                 <button
+                  type="button"
                   onClick={closeModal}
                   className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50"
                 >
@@ -1493,15 +1971,9 @@ export default function ProductsSection() {
                 </button>
                 {!editingProductId || modalTab === "info" ? (
                 <button
-                  onClick={handleSaveProduct}
-                  disabled={
-                    saving ||
-                    !session?.token ||
-                    !form.name.trim() ||
-                    !form.sku.trim() ||
-                    !form.price.trim() ||
-                    !selectedCategoryId
-                  }
+                  type="button"
+                  onClick={() => void handleSaveProduct()}
+                  disabled={saving || !session?.token}
                   className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -1577,8 +2049,12 @@ export default function ProductsSection() {
                     </p>
                     <div className="grid grid-cols-4 gap-2">
                       {(viewingProduct.images ?? []).map((image) => (
-                        <div key={image.id} className="relative h-20 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                          <Image src={image.image} alt={image.alt_text || "Image"} fill className="object-contain p-1" sizes="80px" />
+                        <div key={image.id} className="relative flex h-20 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                          <AdminMediaImage
+                            src={image.image}
+                            alt={image.alt_text || "Image"}
+                            className="max-h-full max-w-full object-contain p-1"
+                          />
                         </div>
                       ))}
                     </div>
@@ -1639,6 +2115,8 @@ export default function ProductsSection() {
           </>
         ) : null}
       </AnimatePresence>
+
+      {confirmDialog}
     </div>
   );
 }

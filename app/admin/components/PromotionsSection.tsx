@@ -16,6 +16,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { AdminAccessNotice } from "@/components/admin/AdminAccessNotice";
+import { useConfirmDialog } from "@/components/admin/useConfirmDialog";
 import { useAuthSession } from "@/components/auth/useAuthSession";
 import { hasAdminAccess } from "@/lib/auth";
 import {
@@ -50,6 +51,7 @@ interface PromoFormState {
   starts_at: string;
   expires_at: string;
   is_active: boolean;
+  applicable_products: string[];
 }
 
 interface FlashFormState {
@@ -82,6 +84,7 @@ const INITIAL_PROMO_FORM: PromoFormState = {
   starts_at: "",
   expires_at: "",
   is_active: true,
+  applicable_products: [],
 };
 
 const INITIAL_FLASH_FORM: FlashFormState = {
@@ -108,11 +111,13 @@ const INITIAL_BANNER_FORM: BannerFormState = {
 
 export default function PromotionsSection() {
   const session = useAuthSession();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [tab, setTab] = useState<TabKey>("coupons");
   const [promos, setPromos] = useState<AdminPromoCode[]>([]);
   const [flashSales, setFlashSales] = useState<AdminFlashSale[]>([]);
   const [banners, setBanners] = useState<AdminBanner[]>([]);
   const [products, setProducts] = useState<AdminCatalogProduct[]>([]);
+  const [productSearch, setProductSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
@@ -181,6 +186,16 @@ export default function PromotionsSection() {
     return map;
   }, [products]);
 
+  const filteredProducts = useMemo(() => {
+    const needle = productSearch.trim().toLowerCase();
+    if (!needle) return products;
+
+    return products.filter((product) => {
+      const label = `${product.name} ${product.sku ?? ""}`.toLowerCase();
+      return label.includes(needle);
+    });
+  }, [productSearch, products]);
+
   const handleDeactivateExpired = async () => {
     if (!session?.token) return;
 
@@ -212,12 +227,14 @@ export default function PromotionsSection() {
         code: promoForm.code.trim().toUpperCase(),
         description: promoForm.description.trim(),
         type: promoForm.type,
-        value: promoForm.value.trim(),
+        value: promoForm.type === "free_shipping" ? "0" : promoForm.value.trim(),
         starts_at: promoForm.starts_at || undefined,
         expires_at: promoForm.expires_at || null,
+        applicable_products: promoForm.applicable_products,
       });
       setShowPromoModal(false);
       setPromoForm(INITIAL_PROMO_FORM);
+      setProductSearch("");
       setSuccess("Code promo cree.");
       await loadData();
     } catch (err) {
@@ -318,7 +335,16 @@ export default function PromotionsSection() {
   };
 
   const handleDeletePromo = async (id: string) => {
-    if (!session?.token || !window.confirm("Supprimer ce code promo ?")) return;
+    if (!session?.token) return;
+
+    const confirmed = await confirm({
+      title: "Supprimer le code promo",
+      description: "Ce code promo sera définitivement supprimé.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     try {
       await deleteAdminPromoCode(session.token, id);
       setSuccess("Code promo supprime.");
@@ -329,7 +355,16 @@ export default function PromotionsSection() {
   };
 
   const handleDeleteFlash = async (id: string) => {
-    if (!session?.token || !window.confirm("Supprimer cette vente flash ?")) return;
+    if (!session?.token) return;
+
+    const confirmed = await confirm({
+      title: "Supprimer la vente flash",
+      description: "Cette vente flash sera définitivement supprimée.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     try {
       await deleteAdminFlashSale(session.token, id);
       setSuccess("Vente flash supprimee.");
@@ -340,7 +375,16 @@ export default function PromotionsSection() {
   };
 
   const handleDeleteBanner = async (id: string) => {
-    if (!session?.token || !window.confirm("Supprimer cette banniere ?")) return;
+    if (!session?.token) return;
+
+    const confirmed = await confirm({
+      title: "Supprimer la bannière",
+      description: "Cette bannière sera définitivement supprimée.",
+      confirmLabel: "Supprimer",
+      variant: "danger",
+    });
+    if (!confirmed) return;
+
     try {
       await deleteAdminBanner(session.token, id);
       setSuccess("Banniere supprimee.");
@@ -375,7 +419,11 @@ export default function PromotionsSection() {
               </button>
               <button
                 type="button"
-                onClick={() => setShowPromoModal(true)}
+                onClick={() => {
+                  setPromoForm(INITIAL_PROMO_FORM);
+                  setProductSearch("");
+                  setShowPromoModal(true);
+                }}
                 className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-200 hover:bg-primary-hover"
               >
                 <Plus className="h-4 w-4" />
@@ -510,6 +558,16 @@ export default function PromotionsSection() {
                         : formatCurrency(promo.value, "FCFA")}
                   </span>
                   <span>{promo.number_times_used ?? 0} utilisation(s)</span>
+                  {promo.applicable_products?.length || promo.applicable_product_labels?.length ? (
+                    <span className="rounded-full bg-orange-50 px-2 py-0.5 text-orange-700">
+                      {(promo.applicable_product_labels?.length ??
+                        promo.applicable_products?.length ??
+                        0)}{" "}
+                      produit(s)
+                    </span>
+                  ) : (
+                    <span>Tous les produits</span>
+                  )}
                   {promo.expires_at ? (
                     <span className="flex items-center gap-1">
                       <Clock className="h-3 w-3" />
@@ -632,7 +690,13 @@ export default function PromotionsSection() {
 
       <AnimatePresence>
         {showPromoModal ? (
-          <ModalShell title="Nouveau code promo" onClose={() => setShowPromoModal(false)}>
+          <ModalShell
+            title="Nouveau code promo"
+            onClose={() => {
+              setShowPromoModal(false);
+              setProductSearch("");
+            }}
+          >
             <input
               value={promoForm.code}
               onChange={(event) => setPromoForm((prev) => ({ ...prev, code: event.target.value }))}
@@ -666,9 +730,72 @@ export default function PromotionsSection() {
               <input
                 value={promoForm.value}
                 onChange={(event) => setPromoForm((prev) => ({ ...prev, value: event.target.value }))}
-                placeholder="Valeur"
-                className="h-10 rounded-xl border border-slate-200 px-4 text-sm outline-none focus:border-primary"
+                placeholder={promoForm.type === "free_shipping" ? "Non requis" : "Valeur"}
+                disabled={promoForm.type === "free_shipping"}
+                className="h-10 rounded-xl border border-slate-200 px-4 text-sm outline-none focus:border-primary disabled:bg-slate-100 disabled:text-slate-400"
               />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Produits concernes
+              </label>
+              <p className="text-xs text-slate-400">
+                Laissez vide pour appliquer le code a tout le catalogue.
+              </p>
+              <input
+                value={productSearch}
+                onChange={(event) => setProductSearch(event.target.value)}
+                placeholder="Rechercher un produit..."
+                className="h-10 w-full rounded-xl border border-slate-200 px-4 text-sm outline-none focus:border-primary"
+              />
+              <div className="max-h-44 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+                {filteredProducts.length === 0 ? (
+                  <p className="px-2 py-3 text-sm text-slate-400">Aucun produit trouve.</p>
+                ) : (
+                  filteredProducts.map((product) => {
+                    const checked = promoForm.applicable_products.includes(product.id);
+
+                    return (
+                      <label
+                        key={product.id}
+                        className={cn(
+                          "flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+                          checked ? "bg-orange-50 text-orange-900" : "hover:bg-white"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setPromoForm((prev) => ({
+                              ...prev,
+                              applicable_products: checked
+                                ? prev.applicable_products.filter((id) => id !== product.id)
+                                : [...prev.applicable_products, product.id],
+                            }));
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-slate-900">
+                            {product.name}
+                          </span>
+                          {product.sku ? (
+                            <span className="block truncate text-xs text-slate-500">
+                              SKU : {product.sku}
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+              {promoForm.applicable_products.length > 0 ? (
+                <p className="text-xs font-medium text-primary">
+                  {promoForm.applicable_products.length} produit(s) selectionne(s)
+                </p>
+              ) : null}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <input
@@ -690,8 +817,14 @@ export default function PromotionsSection() {
             </div>
             <ModalActions
               saving={saving}
-              disabled={!promoForm.code.trim() || !promoForm.value.trim()}
-              onCancel={() => setShowPromoModal(false)}
+              disabled={
+                !promoForm.code.trim() ||
+                (promoForm.type !== "free_shipping" && !promoForm.value.trim())
+              }
+              onCancel={() => {
+                setShowPromoModal(false);
+                setProductSearch("");
+              }}
               onSave={() => void handleSavePromo()}
             />
           </ModalShell>
@@ -852,6 +985,8 @@ export default function PromotionsSection() {
           </ModalShell>
         ) : null}
       </AnimatePresence>
+
+      {confirmDialog}
     </div>
   );
 }

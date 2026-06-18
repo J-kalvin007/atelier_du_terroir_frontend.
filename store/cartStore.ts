@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { getDefaultShippingFee, isFreeShippingPromoType } from "@/lib/shipping";
 
 export interface CartItem {
   productId: string;
@@ -19,6 +20,9 @@ interface CartState {
   items: CartItem[];
   promoCode: string | null;
   promoDiscount: number;
+  promoLabel: string | null;
+  promoType: string | null;
+  promoValue: string | null;
   loyaltyPointsToUse: number;
   isDrawerOpen: boolean;
   hasHydrated: boolean;
@@ -28,11 +32,13 @@ interface CartState {
   removeItem: (productId: string, variantId: string | null) => void;
   updateQuantity: (productId: string, variantId: string | null, qty: number) => void;
   clearCart: () => void;
-  setPromoCode: (code: string | null, discount: number) => void;
+  setPromoCode: (code: string | null, discount: number, label?: string | null, meta?: { type?: string | null; value?: string | null }) => void;
   setLoyaltyPoints: (points: number) => void;
   toggleDrawer: (open?: boolean) => void;
   getItemCount: () => number;
   getSubtotal: () => number;
+  getShippingFee: () => number;
+  getShippingCharged: () => number;
   getTotal: () => number;
 }
 
@@ -42,6 +48,9 @@ export const useCartStore = create<CartState>()(
       items: [],
       promoCode: null,
       promoDiscount: 0,
+      promoLabel: null,
+      promoType: null,
+      promoValue: null,
       loyaltyPointsToUse: 0,
       isDrawerOpen: false,
       hasHydrated: false,
@@ -117,12 +126,21 @@ export const useCartStore = create<CartState>()(
           items: [],
           promoCode: null,
           promoDiscount: 0,
+          promoLabel: null,
+          promoType: null,
+          promoValue: null,
           loyaltyPointsToUse: 0,
         });
       },
 
-      setPromoCode: (code, discount) => {
-        set({ promoCode: code, promoDiscount: discount });
+      setPromoCode: (code, discount, label, meta) => {
+        set({
+          promoCode: code,
+          promoDiscount: discount,
+          promoLabel: label ?? null,
+          promoType: meta?.type ?? null,
+          promoValue: meta?.value ?? null,
+        });
       },
 
       setLoyaltyPoints: (points) => {
@@ -140,7 +158,28 @@ export const useCartStore = create<CartState>()(
       getSubtotal: () =>
         get().items.reduce((sum, item) => sum + parseFloat(item.price) * item.quantity, 0),
 
-      getTotal: () => Math.max(0, get().getSubtotal() - get().promoDiscount),
+      getShippingFee: () => getDefaultShippingFee(),
+
+      getShippingCharged: () => {
+        const state = get();
+        if (isFreeShippingPromoType(state.promoType)) {
+          return 0;
+        }
+        return state.items.length > 0 ? getDefaultShippingFee() : 0;
+      },
+
+      getTotal: () => {
+        const state = get();
+        const subtotal = state.getSubtotal();
+        const shipping = state.getShippingCharged();
+        const freeShipping = isFreeShippingPromoType(state.promoType);
+
+        if (freeShipping) {
+          return Math.max(0, subtotal + shipping);
+        }
+
+        return Math.max(0, subtotal + shipping - state.promoDiscount);
+      },
     }),
     {
       name: "atelier-du-terroir-cart",
@@ -149,6 +188,9 @@ export const useCartStore = create<CartState>()(
         items: state.items,
         promoCode: state.promoCode,
         promoDiscount: state.promoDiscount,
+        promoLabel: state.promoLabel,
+        promoType: state.promoType,
+        promoValue: state.promoValue,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);

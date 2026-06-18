@@ -15,13 +15,17 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  getActiveFlashSales,
   getPublicCategories,
   getProducts,
   searchProducts,
   type ProductListItem,
   type PublicCategory,
+  type PublicFlashSale,
 } from "@/lib/ecommerce-api";
+import { applyFlashSalesToProducts } from "@/lib/promotions";
 import { ProductCard } from "@/components/product/ProductCard";
+import { ProductsPageHeader } from "@/components/product/ProductsPageHeader";
 import { ProductGridSkeleton } from "@/components/shared/LoadingSkeleton";
 
 const SORT_OPTIONS = [
@@ -163,6 +167,7 @@ export function ProductsCatalogClient() {
   const [showFilters, setShowFilters] = useState(false);
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 100000]);
   const [products, setProducts] = useState<ProductListItem[]>([]);
+  const [flashSales, setFlashSales] = useState<PublicFlashSale[]>([]);
   const [categories, setCategories] = useState<PublicCategory[]>([]);
   const [expandedCategoryIds, setExpandedCategoryIds] = useState<Set<string>>(() => new Set());
   const [categoriesPanelOpen, setCategoriesPanelOpen] = useState(true);
@@ -170,6 +175,17 @@ export function ProductsCatalogClient() {
   const [loadingCategories, setLoadingCategories] = useState(true);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const sales = await getActiveFlashSales();
+        setFlashSales(sales);
+      } catch {
+        setFlashSales([]);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -220,7 +236,7 @@ export function ProductsCatalogClient() {
   }, [searchQuery, selectedCategory, sortBy]);
 
   const filteredProducts = useMemo(() => {
-    let result = [...products];
+    let result = applyFlashSalesToProducts([...products], flashSales);
 
     if (selectedCategory && searchQuery.trim().length >= 3) {
       const selectedCategoryName =
@@ -254,7 +270,7 @@ export function ProductsCatalogClient() {
     }
 
     return result;
-  }, [categories, priceRange, products, searchQuery, selectedCategory, sortBy]);
+  }, [categories, flashSales, priceRange, products, searchQuery, selectedCategory, sortBy]);
 
   const totalCategoryCount = useMemo(() => countCategories(categories), [categories]);
 
@@ -292,20 +308,10 @@ export function ProductsCatalogClient() {
 
   return (
     <div className="page-transition bg-[#fbf7e8]">
-      <div className="border-b border-border bg-surface/50 pt-24">
-        <div className="mx-auto max-w-[var(--content-max-width)] px-[var(--spacing-page-x)] py-8">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, ease: "easeOut" }}
-          >
-            <h1 className="font-display text-3xl font-bold lg:text-4xl">Notre Boutique</h1>
-            <p className="mt-2 text-muted">
-              Decouvrez notre selection de {filteredProducts.length} produits disponibles
-            </p>
-          </motion.div>
-        </div>
-      </div>
+      <ProductsPageHeader
+        productCount={filteredProducts.length}
+        categoryCount={totalCategoryCount}
+      />
 
       <div className="mx-auto max-w-[var(--content-max-width)] px-[var(--spacing-page-x)] py-8">
         {categoriesError || productsError ? (
@@ -499,7 +505,7 @@ export function ProductsCatalogClient() {
               <div
                 className={cn(
                   "grid gap-6",
-                  viewMode === "grid" ? "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
+                  viewMode === "grid" ? "grid-cols-2 md:grid-cols-3 xl:grid-cols-4" : "grid-cols-1"
                 )}
               >
                 {filteredProducts.map((product, index) => (
