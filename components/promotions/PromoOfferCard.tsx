@@ -6,7 +6,8 @@ import { motion } from "framer-motion";
 import { ShoppingCart, Star, Zap } from "lucide-react";
 import { authVegetablesImage } from "@/assets/images";
 import type { PromoProductCard } from "@/lib/promotions";
-import { cn, formatCurrency } from "@/lib/utils";
+import { getProductBySlug } from "@/lib/ecommerce-api";
+import { cn, formatCurrency, isUuid } from "@/lib/utils";
 import { useCartStore } from "@/store/cartStore";
 
 export function PromoOfferCard({
@@ -29,12 +30,26 @@ export function PromoOfferCard({
     dimmed && "brightness-[0.88] saturate-[0.85]"
   );
 
-  const handleAddToCart = (event: React.MouseEvent) => {
+  const handleAddToCart = async (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
 
+    let productId = item.productId;
+    if (!isUuid(productId) && item.slug) {
+      try {
+        const product = await getProductBySlug(item.slug);
+        productId = product.id;
+      } catch {
+        return;
+      }
+    }
+
+    if (!isUuid(productId)) {
+      return;
+    }
+
     addItem({
-      productId: item.productId,
+      productId,
       variantId: null,
       name: item.name,
       sku: item.slug,

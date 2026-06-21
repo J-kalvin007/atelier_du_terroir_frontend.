@@ -316,7 +316,7 @@ function readFetchErrorMessage(text: string, status: number, path: string) {
   if (!text.trim()) {
     if (status === 403) {
       if (path.includes("/commandes/validate-commandes")) {
-        return "Commande refusée : connectez-vous avec un compte client (customer), pas un compte administrateur.";
+        return "Commande refusée : vérifiez que votre compte peut passer commande.";
       }
       return "Accès refusé.";
     }
@@ -328,11 +328,11 @@ function readFetchErrorMessage(text: string, status: number, path: string) {
     if (parsed && /invalid token|token non valide/i.test(parsed)) {
       return "Votre session a expiré. Reconnectez-vous pour confirmer la commande.";
     }
-    if (parsed && status === 403 && path.includes("/commandes/validate-commandes")) {
-      if (/permission|admin|platform_admin/i.test(parsed)) {
-        return "Commande refusée : connectez-vous avec un compte client (customer), pas un compte administrateur.";
+      if (parsed && status === 403 && path.includes("/commandes/validate-commandes")) {
+        if (/permission|admin|platform_admin/i.test(parsed)) {
+          return "Commande refusée : vérifiez que votre compte peut passer commande.";
+        }
       }
-    }
     return parsed;
   } catch {
     const djangoMessage = parseDjangoHtmlError(text);
@@ -342,7 +342,7 @@ function readFetchErrorMessage(text: string, status: number, path: string) {
 
     if (status === 403) {
       if (path.includes("/commandes/validate-commandes")) {
-        return "Commande refusée : connectez-vous avec un compte client (customer), pas un compte administrateur.";
+        return "Commande refusée : vérifiez que votre compte peut passer commande.";
       }
       if (path.includes("/admin/")) {
         return "Accès refusé : ce compte n'a pas le rôle platform_admin requis pour les actions admin.";

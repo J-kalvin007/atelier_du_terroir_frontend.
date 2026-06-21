@@ -21,7 +21,7 @@ export type PromoProductCard = {
 export function mapFlashSalesToPromoCards(flashSales: PublicFlashSale[]): PromoProductCard[] {
   return flashSales.map((sale) => ({
     id: sale.id,
-    productId: sale.product_id ?? sale.id,
+    productId: sale.product_id ?? "",
     name: sale.product_name || "Produit en promo",
     slug: sale.product_slug,
     image: sale.product_image || "",

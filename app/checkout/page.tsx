@@ -4,12 +4,13 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuthSession } from "@/components/auth/useAuthSession";
-import { clearSession, hasAdminAccess } from "@/lib/auth";
+import { clearSession } from "@/lib/auth";
 import { checkoutOrder } from "@/lib/ecommerce-api";
+import { resolveCartItemsForCheckout, hasResolvableCartItem } from "@/lib/cart-checkout";
 import { appendOrderPromoMeta, saveOrderPromoSnapshot } from "@/lib/order-promo-meta";
 import { useApplyPromoCode } from "@/hooks/useApplyPromoCode";
 import { CheckoutTotalsSummary } from "@/components/promotions/CheckoutTotalsSummary";
-import { formatCurrency, isInvalidAuthTokenError, isUuid, readApiError } from "@/lib/utils";
+import { formatCurrency, isInvalidAuthTokenError, readApiError } from "@/lib/utils";
 import { isFreeShippingPromoType } from "@/lib/shipping";
 import { useCartStore } from "@/store/cartStore";
 import { LegacyHeader } from "@/components/home/LegacyHeader";
@@ -19,7 +20,6 @@ function getCheckoutBlockReason(options: {
   cartHydrated: boolean;
   loading: boolean;
   hasSession: boolean;
-  isAdminAccount: boolean;
   itemsCount: number;
   invalidCartItemsCount: number;
 }) {
@@ -35,16 +35,12 @@ function getCheckoutBlockReason(options: {
     return "Connectez-vous pour confirmer la commande.";
   }
 
-  if (options.isAdminAccount) {
-    return "Les comptes administrateur ne peuvent pas passer commande.";
-  }
-
   if (options.itemsCount === 0) {
     return "Votre panier est vide.";
   }
 
   if (options.invalidCartItemsCount > 0) {
-    return "Certains articles du panier ont un identifiant invalide. Videz le panier puis rajoutez les produits.";
+    return "Certains articles du panier sont invalides. Retirez-les puis rajoutez les produits depuis la boutique.";
   }
 
   return null;
@@ -54,7 +50,7 @@ export default function CheckoutPage() {
   const router = useRouter();
   const session = useAuthSession();
   const { revalidateActiveCode } = useApplyPromoCode();
-  const { items, getTotal, getSubtotal, getShippingFee, getShippingCharged, clearCart, hasHydrated, pruneInvalidItems, promoCode, promoDiscount, promoLabel, promoType, promoValue } =
+  const { items, getTotal, getSubtotal, getShippingFee, getShippingCharged, clearCart, hasHydrated, promoCode, promoDiscount, promoLabel, promoType, promoValue } =
     useCartStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,19 +63,22 @@ export default function CheckoutPage() {
     notes: "",
   });
 
-  const isAdminAccount = hasAdminAccess(session);
-  const invalidCartItems = items.filter((item) => !isUuid(item.productId));
+  const invalidCartItems = items.filter((item) => !hasResolvableCartItem(item));
 
   useEffect(() => {
     if (!hasHydrated) {
       return;
     }
 
-    const removedCount = pruneInvalidItems(isUuid);
+    const currentItems = useCartStore.getState().items;
+    const validItems = currentItems.filter((item) => hasResolvableCartItem(item));
+    const removedCount = currentItems.length - validItems.length;
+
     if (removedCount > 0) {
+      useCartStore.setState({ items: validItems });
       setRemovedInvalidItems(removedCount);
     }
-  }, [hasHydrated, pruneInvalidItems]);
+  }, [hasHydrated]);
 
   useEffect(() => {
     if (!hasHydrated || !promoCode || items.length === 0) {
@@ -94,18 +93,10 @@ export default function CheckoutPage() {
         cartHydrated: hasHydrated,
         loading,
         hasSession: Boolean(session?.token),
-        isAdminAccount,
         itemsCount: items.length,
         invalidCartItemsCount: invalidCartItems.length,
       }),
-    [
-      hasHydrated,
-      loading,
-      session?.token,
-      isAdminAccount,
-      items.length,
-      invalidCartItems.length,
-    ]
+    [hasHydrated, loading, session?.token, items.length, invalidCartItems.length]
   );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -125,6 +116,8 @@ export default function CheckoutPage() {
     setError(null);
 
     try {
+      const checkoutItems = await resolveCartItemsForCheckout(items);
+
       const hasPromo =
         Boolean(promoCode) &&
         (promoDiscount > 0 || isFreeShippingPromoType(promoType));
@@ -148,11 +141,7 @@ export default function CheckoutPage() {
         promo_value: promoValue,
         free_shipping: isFreeShippingPromoType(promoType),
         shipping_fee: getShippingFee(),
-        items: items.map((item) => ({
-          product_id: item.productId,
-          quantity: item.quantity,
-          variant_id: item.variantId,
-        })),
+        items: checkoutItems,
       });
 
       if (order.reference && hasPromo) {
@@ -201,17 +190,6 @@ export default function CheckoutPage() {
                 Connectez-vous
               </Link>{" "}
               pour confirmer votre commande.
-            </div>
-          ) : null}
-
-          {isAdminAccount ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Vous etes connecte avec un compte administrateur. Pour acheter, deconnectez-vous puis
-              connectez-vous avec un compte client sur{" "}
-              <Link href="/login?redirect=/checkout" className="font-semibold underline">
-                /login
-              </Link>
-              .
             </div>
           ) : null}
 
@@ -305,7 +283,8 @@ export default function CheckoutPage() {
               </Link>
               <button
                 type="submit"
-                disabled={Boolean(blockReason)}
+                disabled={loading || !hasHydrated}
+                aria-disabled={Boolean(blockReason) || loading || !hasHydrated}
                 className="rounded-2xl bg-[#8b5e34] px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {loading ? "Traitement..." : "Confirmer la commande"}
